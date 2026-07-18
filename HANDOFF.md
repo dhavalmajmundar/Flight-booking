@@ -1,0 +1,89 @@
+# Flight Bot Handoff
+
+Last updated: 2026-07-18
+
+## Current status
+
+- Repository: `dhavalmajmundar/Flight-booking`
+- Production branch: `main`
+- Hosting: Railway, connected to GitHub for automatic deployments
+- Runtime: Python Telegram bot using long polling
+- Flight provider: RouteStack
+- Latest functional commit before this handoff update: `01f26d6`
+- Verification: 19 automated tests passing
+
+## User experience
+
+- `/search` starts the guided search.
+- `/flight ORIGIN DESTINATION YYYY-MM-DD` starts a one-line search.
+- One-line defaults:
+  - Round trip, returning seven days later
+  - One adult
+  - Economy
+  - Flexible dates within ±3 days
+  - Nearby airports enabled domestically and disabled internationally
+  - Domestic baggage: 0 checked bags and 1 carry-on
+  - International baggage: 2 checked bags and 1 carry-on
+  - Balanced ranking
+- Before any RouteStack fare call, the bot shows a free calendar estimate based
+  on broad historical Monday–Wednesday travel trends.
+- The user then chooses:
+  - Search only the suggested date
+  - Compare all dates within ±3 days
+  - Cancel without making a fare call
+- The full comparison shows the cheapest live departure day and savings versus
+  the requested date.
+- Results identify best overall, cheapest, fastest, and flexible-date options.
+- Up to three distinct results can be revalidated and opened in RouteStack's
+  hosted checkout.
+- Telegram never collects payment details or issues tickets.
+
+## API-usage safeguards
+
+- Exact IATA airport codes are resolved from the local `airportsdata` package.
+- City names and unsupported city codes fall back to RouteStack location lookup.
+- International searches do not request nearby-airport alternatives by default.
+- Identical individual fare searches are cached in memory for five minutes.
+- Overlapping flexible-date searches can reuse cached date results.
+- Cached offers are labeled and always revalidated before checkout.
+- Confirmation screens disclose the maximum possible RouteStack search calls.
+
+## Important files
+
+- `flight_bot/bot.py`: Telegram commands, conversations, confirmation, checkout
+- `flight_bot/routestack.py`: authentication, location resolution, search cache,
+  offer parsing, revalidation, and checkout links
+- `flight_bot/ranking.py`: price/time/stop ranking and cheapest-date calculation
+- `flight_bot/formatting.py`: Telegram result presentation
+- `flight_bot/airports.py`: local airport and country helpers
+- `flight_bot/config.py`: environment configuration
+- `tests/`: automated regression tests
+
+## Required environment variables
+
+- `TELEGRAM_BOT_TOKEN`
+- `ROUTESTACK_API_KEY`
+- `ROUTESTACK_API_SECRET`
+
+Optional variables are documented in `.env.example`. Never commit `.env`,
+Telegram credentials, RouteStack secrets, fare identifiers, or checkout URLs.
+
+## Verification and deployment
+
+Run:
+
+```powershell
+python -m pip install -e ".[dev]"
+python -m compileall -q flight_bot tests
+python -m pytest -q
+```
+
+After every completed update:
+
+1. Update this file with the changed behavior, test count, and latest commit context.
+2. Commit all scoped changes.
+3. Push to `origin main`.
+4. Report the commit ID and expected Railway redeployment.
+
+Railway should deploy automatically after a successful push to `main`. Only one
+polling instance should run for the Telegram bot token.

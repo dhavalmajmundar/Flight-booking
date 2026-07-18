@@ -35,7 +35,7 @@ def request() -> SearchRequest:
         return_date=None,
         adults=1,
         cabin=Cabin.ECONOMY,
-        flexible_dates=False,
+        flexible_dates=True,
         nearby_airports=False,
         checked_bags=0,
     )
@@ -59,4 +59,6 @@ def test_results_include_three_distinct_recommendations_and_safety_notice() -> N
     assert "Best overall" in message
     assert "Cheapest" in message
     assert "Fastest" in message
+    assert "Cheapest travel-day check" in message
+    assert "Best day:" in message
     assert "does not take payment or issue tickets" in message

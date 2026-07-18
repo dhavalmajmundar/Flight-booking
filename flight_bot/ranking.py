@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from .models import FlightOption, Priority, SearchRequest
 
@@ -12,6 +13,8 @@ class RankedResults:
     cheapest: FlightOption
     fastest: FlightOption
     best_flexible: FlightOption | None
+    lowest_by_date: tuple[tuple[date, FlightOption], ...]
+    cheapest_travel_date: FlightOption
 
 
 def _normalize(value: float, low: float, high: float) -> float:
@@ -93,10 +96,29 @@ def rank_flights(
             best_flexible = min(
                 off_date, key=lambda item: (item.total_price, item.duration_minutes)
             )
+    by_date: dict[date, FlightOption] = {}
+    for offer in offers:
+        departure_date = offer.legs[0].departure.date()
+        current = by_date.get(departure_date)
+        if current is None or (
+            offer.total_price,
+            offer.duration_minutes,
+        ) < (
+            current.total_price,
+            current.duration_minutes,
+        ):
+            by_date[departure_date] = offer
+    lowest_by_date = tuple(sorted(by_date.items()))
+    cheapest_travel_date = min(
+        by_date.values(),
+        key=lambda item: (item.total_price, item.duration_minutes),
+    )
     return RankedResults(
         ordered=ordered,
         best_overall=ordered[0],
         cheapest=cheapest,
         fastest=fastest,
         best_flexible=best_flexible,
+        lowest_by_date=lowest_by_date,
+        cheapest_travel_date=cheapest_travel_date,
     )

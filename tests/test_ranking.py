@@ -56,3 +56,25 @@ def test_cheapest_priority_favors_price() -> None:
     result = rank_flights([cheap, expensive], request(Priority.CHEAPEST))
     assert result is not None
     assert result.best_overall is cheap
+
+
+def test_cheapest_travel_date_uses_daily_lowest_fares() -> None:
+    requested = option("requested", 300, 300, 0)
+    earlier = option("earlier", 180, 330, 0)
+    earlier.legs = (
+        Leg(
+            origin="JFK",
+            destination="LAX",
+            departure=datetime(2026, 9, 14, 8),
+            arrival=datetime(2026, 9, 14, 13, 30),
+            duration_minutes=330,
+            stops=0,
+        ),
+    )
+    result = rank_flights([requested, earlier], request())
+    assert result is not None
+    assert result.cheapest_travel_date is earlier
+    assert [travel_date for travel_date, _ in result.lowest_by_date] == [
+        date(2026, 9, 14),
+        date(2026, 9, 15),
+    ]

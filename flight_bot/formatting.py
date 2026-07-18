@@ -28,6 +28,52 @@ def _reason(option: FlightOption, results: RankedResults) -> str:
     return "; ".join(reasons) or "strong alternative"
 
 
+def _flexible_date_lines(
+    results: RankedResults, request: SearchRequest
+) -> list[str]:
+    if not request.flexible_dates or not results.lowest_by_date:
+        return []
+
+    cheapest = results.cheapest_travel_date
+    cheapest_date = cheapest.legs[0].departure.date()
+    requested_option = dict(results.lowest_by_date).get(request.departure_date)
+    lines = ["📅 <b>Cheapest travel-day check (±3 days)</b>"]
+    for travel_date, option in results.lowest_by_date:
+        marker = " 🏆" if option is cheapest else ""
+        lines.append(
+            f"{travel_date:%a %b %d}: {option.currency} "
+            f"{option.total_price:,.2f}{marker}"
+        )
+    lines.append(
+        f"<b>Best day:</b> {cheapest_date:%A, %B %d} — "
+        f"{cheapest.currency} {cheapest.total_price:,.2f}"
+    )
+    if requested_option:
+        savings = requested_option.total_price - cheapest.total_price
+        day_difference = (cheapest_date - request.departure_date).days
+        if savings > 0.005:
+            direction = (
+                f"{abs(day_difference)} day(s) "
+                f"{'later' if day_difference > 0 else 'earlier'}"
+            )
+            lines.append(
+                f"<b>Potential saving:</b> {cheapest.currency} {savings:,.2f} "
+                f"by departing {direction}."
+            )
+        else:
+            lines.append("Your requested departure date is already the cheapest found.")
+    else:
+        lines.append("No matching fare was returned for the requested departure date.")
+    lines.extend(
+        [
+            "These are live fares for travel dates, not a prediction about which "
+            "weekday to purchase.",
+            "",
+        ]
+    )
+    return lines
+
+
 def selected_results(results: RankedResults, limit: int = 5) -> list[FlightOption]:
     selected: list[FlightOption] = []
     for option in [
@@ -68,6 +114,7 @@ def format_results(
         f"Prices are total for {request.adults} adult(s), including provider-reported taxes/fees.",
         "",
     ]
+    lines.extend(_flexible_date_lines(results, request))
     for rank, option in enumerate(selected, 1):
         tags = " · ".join(labels.get(_option_key(option), []))
         if tags:

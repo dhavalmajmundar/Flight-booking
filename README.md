@@ -24,6 +24,8 @@ The bot does **not** search in the background and does **not** invent prices.
 - Optional nearby-airport comparison within roughly 100 km
 - Checked-bag, airline avoidance, budget, and optimization preferences
 - Best overall, cheapest, fastest, and flexible-date picks
+- Cheapest departure-day table across the live ±3-day search, including savings
+  versus the requested date
 - Transparent warnings when baggage or fare conditions need verification
 - Long polling, so no public webhook is required
 
@@ -134,6 +136,9 @@ docker run --env-file .env --restart unless-stopped flight-bot
 
 - Flexible-date mode makes up to seven provider searches: the requested dates and
   matching trip-length shifts from three days earlier through three days later.
+- Those same results produce the cheapest travel-day table, so this comparison
+  does not add provider calls. It compares departure dates rather than claiming
+  there is a universal best weekday to purchase airfare.
 - Exact three-letter airport codes are resolved from a bundled local database,
   avoiding RouteStack location calls. City codes and names fall back to RouteStack.
 - Identical date/route searches are cached for five minutes. Cached results are

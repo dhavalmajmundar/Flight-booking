@@ -24,6 +24,7 @@ from telegram.ext import (
 )
 
 from .config import Settings
+from .airports import is_domestic, local_airport
 from .formatting import format_results, selected_results
 from .models import Cabin, FlightOption, Priority, SearchRequest
 from .ranking import rank_flights
@@ -502,11 +503,10 @@ async def show_confirmation(
     budget_text = (
         f"${trip['max_budget']:,.2f}" if trip["max_budget"] else "no maximum"
     )
-    maximum_provider_calls = (7 if trip["flexible_dates"] else 1) + (
-        4
-        if trip["nearby_airports"] or trip.get("auto_nearby")
-        else 0
-    )
+    nearby_search_allowance = _nearby_search_allowance(trip)
+    maximum_provider_calls = (
+        7 if trip["flexible_dates"] else 1
+    ) + nearby_search_allowance
     nearby_text = (
         "smart: yes domestic; no international"
         if trip.get("auto_nearby")
@@ -520,6 +520,39 @@ async def show_confirmation(
             f"{trip.get('carry_on_bags', 1)} carry-on each"
         )
     )
+    date_advice = ""
+    confirmation_buttons: tuple[str, ...]
+    if trip["flexible_dates"]:
+        suggested = suggested_departure_date(trip["departure_date"])
+        trip["suggested_departure_date"] = suggested
+        shift = (suggested - trip["departure_date"]).days
+        shift_text = (
+            "the requested date"
+            if shift == 0
+            else f"{abs(shift)} day(s) {'later' if shift > 0 else 'earlier'}"
+        )
+        date_advice = (
+            "\n📅 Free date estimate (no API call): "
+            f"{suggested:%A, %Y-%m-%d} ({shift_text}).\n"
+            "This uses a broad U.S. historical Monday–Wednesday travel trend, "
+            "not live route prices. It may not apply to every market. Choose the "
+            "full comparison to know the cheapest live date.\n"
+            f"Suggested-date search: up to {1 + nearby_search_allowance} "
+            "RouteStack search token(s).\n"
+        )
+        confirmation_buttons = (
+            "Search suggested date",
+            "Compare all ±3 days",
+            "Cancel",
+        )
+    else:
+        confirmation_buttons = ("Search now", "Cancel")
+    usage_label = (
+        "Full flexible comparison"
+        if trip["flexible_dates"]
+        else "Planned search"
+    )
+
     await update.message.reply_text(
         "Please confirm:\n"
         f"{trip['origin']} → {trip['destination']}\n"
@@ -529,26 +562,85 @@ async def show_confirmation(
         f"Nearby airports: {nearby_text} | "
         f"Baggage: {baggage_text}\n"
         f"Budget: {budget_text} | Priority: {trip['priority'].value}\n\n"
-        f"RouteStack usage: up to {maximum_provider_calls} search token(s).\n\n"
+        f"{usage_label}: up to {maximum_provider_calls} "
+        f"RouteStack search token(s).\n"
+        f"{date_advice}\n"
         "Search live fares now?",
-        reply_markup=_keyboard(("Search now", "Cancel")),
+        reply_markup=_keyboard(*((button,) for button in confirmation_buttons)),
     )
     return CONFIRM
+
+
+def _nearby_search_allowance(trip: dict) -> int:
+    if not trip.get("auto_nearby"):
+        return 4 if trip.get("nearby_airports") else 0
+    origin = local_airport(str(trip.get("origin", "")))
+    destination = local_airport(str(trip.get("destination", "")))
+    if origin and destination:
+        return 4 if is_domestic(origin[2], destination[2]) else 0
+    # Free-text cities need provider resolution, so disclose the safe maximum.
+    return 4
+
+
+def suggested_departure_date(departure: date) -> date:
+    """Choose a no-call weekday candidate within ±3 days.
+
+    This is deliberately a broad calendar heuristic, not a fare prediction.
+    Monday through Wednesday are preferred, followed by Thursday, Saturday,
+    Friday, and Sunday. The closest date wins within the same tier.
+    """
+    weekday_tier = {
+        0: 0,  # Monday
+        1: 0,  # Tuesday
+        2: 0,  # Wednesday
+        3: 1,  # Thursday
+        5: 2,  # Saturday
+        4: 3,  # Friday
+        6: 3,  # Sunday
+    }
+    candidates = [
+        departure + timedelta(days=shift)
+        for shift in range(-3, 4)
+        if departure + timedelta(days=shift) >= date.today()
+    ]
+    return min(
+        candidates,
+        key=lambda candidate: (
+            weekday_tier[candidate.weekday()],
+            abs((candidate - departure).days),
+            candidate,
+        ),
+    )
 
 
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     answer = update.message.text.strip().lower()
     if answer == "cancel":
         return await cancel(update, context)
-    if answer != "search now":
-        await update.message.reply_text("Choose Search now or Cancel.")
+    trip = context.user_data["trip"]
+    if answer == "search suggested date" and trip["flexible_dates"]:
+        suggested = trip.pop("suggested_departure_date")
+        shift = suggested - trip["departure_date"]
+        trip["departure_date"] = suggested
+        if trip["return_date"]:
+            trip["return_date"] += shift
+        trip["flexible_dates"] = False
+    elif answer == "compare all ±3 days" and trip["flexible_dates"]:
+        trip.pop("suggested_departure_date", None)
+    elif answer == "search now":
+        trip.pop("suggested_departure_date", None)
+    else:
+        await update.message.reply_text(
+            "Choose Search suggested date, Compare all ±3 days, or Cancel."
+            if trip["flexible_dates"]
+            else "Choose Search now or Cancel."
+        )
         return CONFIRM
 
     await update.message.reply_text(
         "Searching live fares and comparing the best options…",
         reply_markup=ReplyKeyboardRemove(),
     )
-    trip = context.user_data["trip"]
     settings: Settings = context.application.bot_data["settings"]
     request = SearchRequest(currency=settings.default_currency, **trip)
     client: RouteStackClient = context.application.bot_data["routestack"]

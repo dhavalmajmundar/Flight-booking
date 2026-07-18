@@ -5,7 +5,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from flight_bot.bot import BAGS, flexible, parse_flight_command
+from flight_bot.bot import (
+    BAGS,
+    _nearby_search_allowance,
+    flexible,
+    parse_flight_command,
+    suggested_departure_date,
+)
 from flight_bot.models import Cabin, Priority
 
 
@@ -103,3 +109,15 @@ def test_guided_search_uses_automatic_nearby_default() -> None:
     assert next_state == BAGS
     assert context.user_data["trip"]["nearby_airports"] is False
     assert context.user_data["trip"]["auto_nearby"] is True
+
+
+def test_no_call_date_suggestion_prefers_nearby_midweek() -> None:
+    friday = date(2026, 9, 18)
+    assert friday.weekday() == 4
+    assert suggested_departure_date(friday) == date(2026, 9, 16)
+
+
+def test_no_call_token_estimate_uses_local_route_countries() -> None:
+    base = {"auto_nearby": True, "nearby_airports": False, "origin": "JFK"}
+    assert _nearby_search_allowance({**base, "destination": "LAX"}) == 4
+    assert _nearby_search_allowance({**base, "destination": "LHR"}) == 0

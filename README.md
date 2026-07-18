@@ -26,6 +26,8 @@ The bot does **not** search in the background and does **not** invent prices.
 - Best overall, cheapest, fastest, and flexible-date picks
 - Cheapest departure-day table across the live ±3-day search, including savings
   versus the requested date
+- No-call calendar estimate before confirmation, with a choice between one
+  suggested-date search and the accurate seven-date live comparison
 - Transparent warnings when baggage or fare conditions need verification
 - Long polling, so no public webhook is required
 
@@ -93,6 +95,10 @@ Use `--nights 5` for a five-night round trip, `--trip one-way` for one-way,
 to restore route-aware baggage after a manual override.
 
 The bot still asks for confirmation before spending RouteStack search tokens.
+When flexible dates are enabled, that confirmation first shows a free calendar
+estimate favoring Monday–Wednesday departures within ±3 days. Users can search
+only that suggested date to reduce provider usage or choose the complete live
+comparison. The estimate is a broad historical pattern, not a live price claim.
 
 ## Booking handoff
 
@@ -139,6 +145,10 @@ docker run --env-file .env --restart unless-stopped flight-bot
 - Those same results produce the cheapest travel-day table, so this comparison
   does not add provider calls. It compares departure dates rather than claiming
   there is a universal best weekday to purchase airfare.
+- The pre-search calendar estimate follows Google's 2025 aggregated finding that
+  Monday–Wednesday travel averaged less than weekend departures for trips from
+  U.S. airports. It is clearly labeled as an estimate because only live inventory
+  can establish the cheapest date for a specific route.
 - Exact three-letter airport codes are resolved from a bundled local database,
   avoiding RouteStack location calls. City codes and names fall back to RouteStack.
 - Identical date/route searches are cached for five minutes. Cached results are

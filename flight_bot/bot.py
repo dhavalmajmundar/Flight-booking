@@ -6,6 +6,7 @@ import secrets
 from datetime import date, timedelta
 
 from telegram import (
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
@@ -13,6 +14,7 @@ from telegram import (
     Update,
 )
 from telegram.constants import ParseMode
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -67,6 +69,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Use /search and answer the guided questions. I will collect your route, "
         "dates, passengers, cabin, baggage, airline preferences, budget, and "
         "priority. No provider search happens until you confirm.\n\n"
+        "Use /defaults to review the smart settings without making a search.\n\n"
         "For a one-line request:\n"
         "/flight JFK LAX 2026-09-15\n\n"
         "Smart defaults: round trip returning after 7 nights, 1 adult, economy, "
@@ -79,6 +82,42 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "--priority balanced\n\n"
         "Airport codes such as JFK work best, but city or airport names are accepted."
     )
+
+
+async def defaults_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await update.message.reply_text(
+        "Smart defaults for /flight:\n"
+        "• Round trip returning 7 days later\n"
+        "• 1 adult in Economy\n"
+        "• Flexible dates within ±3 days\n"
+        "• Nearby airports: on domestic, off international\n"
+        "• Domestic baggage: 0 checked + 1 carry-on\n"
+        "• International baggage: 2 checked + 1 carry-on\n"
+        "• Balanced ranking\n\n"
+        "Before searching, choose the free suggested-date estimate or the full "
+        "live ±3-day comparison. Use /help for every one-line override."
+    )
+
+
+BOT_COMMANDS = (
+    BotCommand("start", "Open the flight assistant"),
+    BotCommand("search", "Start a guided flight search"),
+    BotCommand("flight", "Search in one line: JFK LAX 2026-09-15"),
+    BotCommand("defaults", "Show smart search defaults"),
+    BotCommand("help", "Show commands and one-line options"),
+    BotCommand("cancel", "Cancel the current search"),
+)
+
+
+async def configure_bot_commands(application: Application) -> None:
+    try:
+        await application.bot.set_my_commands(BOT_COMMANDS)
+        logger.info("Registered %d Telegram bot commands", len(BOT_COMMANDS))
+    except TelegramError as exc:
+        # A temporary Telegram failure should not stop polling or flight search.
+        logger.warning("Could not register Telegram command menu: %s", exc)
 
 
 async def begin_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -825,6 +864,7 @@ def build_application(settings: Settings) -> Application:
     application = (
         Application.builder()
         .token(settings.telegram_bot_token)
+        .post_init(configure_bot_commands)
         .post_shutdown(on_shutdown)
         .build()
     )
@@ -861,6 +901,7 @@ def build_application(settings: Settings) -> Application:
     )
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("defaults", defaults_command))
     application.add_handler(conversation)
     application.add_handler(
         CallbackQueryHandler(

@@ -9,6 +9,8 @@ The bot does **not** search in the background and does **not** invent prices.
 ## Features
 
 - Guided `/search` conversation
+- Telegram slash-command menu registered automatically at startup
+- `/defaults` helper describing the smart settings without making a fare call
 - One-line `/flight` command with optional filters
 - Smart `/flight` defaults: 7-night round trip, one adult, economy, flexible
   dates, nearby airports for domestic routes only, and route-aware baggage
@@ -70,6 +72,7 @@ python -m flight_bot.main
 ```
 
 Then open the bot in Telegram and send `/start` or `/search`.
+Typing `/` shows the registered command menu after the deployment has restarted.
 
 For a minimal one-line search:
 

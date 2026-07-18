@@ -11,12 +11,15 @@ Last updated: 2026-07-18
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 21 automated tests passing
+- Verification: 22 automated tests passing
 
 ## User experience
 
 - `/search` starts the guided search.
 - `/flight ORIGIN DESTINATION YYYY-MM-DD` starts a one-line search.
+- `/defaults` explains the smart defaults without using RouteStack.
+- The bot registers `/start`, `/search`, `/flight`, `/defaults`, `/help`, and
+  `/cancel` with Telegram during startup so typing `/` displays a command menu.
 - One-line defaults:
   - Round trip, returning seven days later
   - One adult

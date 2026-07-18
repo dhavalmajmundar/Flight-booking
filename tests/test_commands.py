@@ -7,7 +7,9 @@ import pytest
 
 from flight_bot.bot import (
     BAGS,
+    BOT_COMMANDS,
     _nearby_search_allowance,
+    configure_bot_commands,
     flexible,
     parse_flight_command,
     suggested_departure_date,
@@ -121,3 +123,20 @@ def test_no_call_token_estimate_uses_local_route_countries() -> None:
     base = {"auto_nearby": True, "nearby_airports": False, "origin": "JFK"}
     assert _nearby_search_allowance({**base, "destination": "LAX"}) == 4
     assert _nearby_search_allowance({**base, "destination": "LHR"}) == 0
+
+
+def test_startup_registers_telegram_slash_menu() -> None:
+    bot = SimpleNamespace(set_my_commands=AsyncMock())
+    application = SimpleNamespace(bot=bot)
+
+    asyncio.run(configure_bot_commands(application))
+
+    bot.set_my_commands.assert_awaited_once_with(BOT_COMMANDS)
+    assert [command.command for command in BOT_COMMANDS] == [
+        "start",
+        "search",
+        "flight",
+        "defaults",
+        "help",
+        "cancel",
+    ]

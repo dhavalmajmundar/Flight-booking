@@ -9,6 +9,7 @@ The bot does **not** search in the background and does **not** invent prices.
 ## Features
 
 - Guided `/search` conversation
+- One-line `/flight` command with optional filters
 - One-way and round-trip searches
 - Economy, premium economy, business, and first class
 - Optional ±3-day flexible-date comparison while preserving trip length
@@ -54,6 +55,20 @@ python -m flight_bot.main
 ```
 
 Then open the bot in Telegram and send `/start` or `/search`.
+
+For a minimal one-line search:
+
+```text
+/flight JFK LAX 2026-09-15
+```
+
+For all supported one-line options:
+
+```text
+/flight JFK LAX 2026-09-15 --return 2026-09-20 --adults 2 --cabin economy --flex yes --nearby no --bags 1 --prefer DL,UA --avoid NK,F9 --budget 1200 --priority balanced
+```
+
+The bot still asks for confirmation before spending RouteStack search tokens.
 
 ## Tests
 

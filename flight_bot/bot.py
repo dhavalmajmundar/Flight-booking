@@ -57,6 +57,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Use /search and answer the guided questions. I will collect your route, "
         "dates, passengers, cabin, baggage, airline preferences, budget, and "
         "priority. No provider search happens until you confirm.\n\n"
+        "For a one-line request:\n"
+        "/flight JFK LAX 2026-09-15\n\n"
+        "Add options such as --return 2026-09-20 --adults 2 --cabin business "
+        "--flex yes --nearby no --bags 1 --prefer DL,UA --avoid NK,F9 "
+        "--budget 1200 --priority balanced\n\n"
         "Airport codes such as JFK work best, but city or airport names are accepted."
     )
 
@@ -68,6 +73,142 @@ async def begin_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         reply_markup=ReplyKeyboardRemove(),
     )
     return ORIGIN
+
+
+def _yes_no(value: str, option: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized not in {"yes", "no"}:
+        raise ValueError(f"{option} must be yes or no")
+    return normalized == "yes"
+
+
+def _airline_codes(value: str, option: str) -> set[str]:
+    codes = {code.strip().upper() for code in value.split(",") if code.strip()}
+    if any(not re.fullmatch(r"[A-Z0-9]{2}", code) for code in codes):
+        raise ValueError(f"{option} must contain 2-character IATA airline codes")
+    return codes
+
+
+def parse_flight_command(args: list[str]) -> dict:
+    if len(args) < 3:
+        raise ValueError("origin, destination, and departure date are required")
+
+    departure_value = _parse_future_date(args[2])
+    if not departure_value:
+        raise ValueError("departure must be a future date in YYYY-MM-DD format")
+
+    trip: dict = {
+        "origin": args[0],
+        "destination": args[1],
+        "departure_date": departure_value,
+        "return_date": None,
+        "adults": 1,
+        "cabin": Cabin.ECONOMY,
+        "flexible_dates": False,
+        "nearby_airports": False,
+        "checked_bags": 0,
+        "preferred_airlines": set(),
+        "avoided_airlines": set(),
+        "max_budget": None,
+        "priority": Priority.BALANCED,
+    }
+    value_options = {
+        "--return",
+        "--adults",
+        "--cabin",
+        "--flex",
+        "--nearby",
+        "--bags",
+        "--prefer",
+        "--avoid",
+        "--budget",
+        "--priority",
+    }
+    index = 3
+    while index < len(args):
+        option = args[index].lower()
+        if option not in value_options:
+            raise ValueError(f"unknown option: {args[index]}")
+        if index + 1 >= len(args):
+            raise ValueError(f"{option} requires a value")
+        value = args[index + 1]
+
+        if option == "--return":
+            parsed = _parse_future_date(value)
+            if not parsed or parsed <= trip["departure_date"]:
+                raise ValueError("--return must be after departure")
+            trip["return_date"] = parsed
+        elif option == "--adults":
+            try:
+                adults = int(value)
+            except ValueError as exc:
+                raise ValueError("--adults must be a number from 1 to 9") from exc
+            if not 1 <= adults <= 9:
+                raise ValueError("--adults must be a number from 1 to 9")
+            trip["adults"] = adults
+        elif option == "--cabin":
+            cabin_value = value.lower().replace("-", "_")
+            cabin_map = {
+                "economy": Cabin.ECONOMY,
+                "premium_economy": Cabin.PREMIUM_ECONOMY,
+                "business": Cabin.BUSINESS,
+                "first": Cabin.FIRST,
+            }
+            if cabin_value not in cabin_map:
+                raise ValueError(
+                    "--cabin must be economy, premium-economy, business, or first"
+                )
+            trip["cabin"] = cabin_map[cabin_value]
+        elif option == "--flex":
+            trip["flexible_dates"] = _yes_no(value, "--flex")
+        elif option == "--nearby":
+            trip["nearby_airports"] = _yes_no(value, "--nearby")
+        elif option == "--bags":
+            try:
+                bags = int(value)
+            except ValueError as exc:
+                raise ValueError("--bags must be 0, 1, or 2") from exc
+            if bags not in {0, 1, 2}:
+                raise ValueError("--bags must be 0, 1, or 2")
+            trip["checked_bags"] = bags
+        elif option == "--prefer":
+            trip["preferred_airlines"] = _airline_codes(value, "--prefer")
+        elif option == "--avoid":
+            trip["avoided_airlines"] = _airline_codes(value, "--avoid")
+        elif option == "--budget":
+            try:
+                budget_value = float(value.replace("$", "").replace(",", ""))
+            except ValueError as exc:
+                raise ValueError("--budget must be a positive number") from exc
+            if budget_value <= 0:
+                raise ValueError("--budget must be a positive number")
+            trip["max_budget"] = budget_value
+        elif option == "--priority":
+            try:
+                trip["priority"] = Priority(value.lower())
+            except ValueError as exc:
+                raise ValueError(
+                    "--priority must be balanced, cheapest, fastest, or nonstop"
+                ) from exc
+        index += 2
+    return trip
+
+
+async def flight_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    try:
+        trip = parse_flight_command(context.args)
+    except ValueError as exc:
+        await update.message.reply_text(
+            f"Invalid flight command: {exc}\n\n"
+            "Example:\n"
+            "/flight JFK LAX 2026-09-15 --adults 1 --cabin economy "
+            "--flex no --nearby no --bags 0 --priority balanced"
+        )
+        return ConversationHandler.END
+    context.user_data["trip"] = trip
+    return await show_confirmation(update, context)
 
 
 async def origin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -284,6 +425,12 @@ async def priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Choose one of the four options.")
         return PRIORITY
     context.user_data["trip"]["priority"] = selected
+    return await show_confirmation(update, context)
+
+
+async def show_confirmation(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     trip = context.user_data["trip"]
     return_text = (
         trip["return_date"].isoformat() if trip["return_date"] else "one-way"
@@ -302,7 +449,7 @@ async def priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"Flexible: {'yes, ±3 days' if trip['flexible_dates'] else 'no'} | "
         f"Nearby airports: {'yes' if trip['nearby_airports'] else 'no'} | "
         f"Checked bags: {trip['checked_bags']} each\n"
-        f"Budget: {budget_text} | Priority: {selected.value}\n\n"
+        f"Budget: {budget_text} | Priority: {trip['priority'].value}\n\n"
         f"RouteStack usage: up to {maximum_provider_calls} search token(s).\n\n"
         "Search live fares now?",
         reply_markup=_keyboard(("Search now", "Cancel")),
@@ -390,7 +537,10 @@ def build_application(settings: Settings) -> Application:
     application.bot_data["routestack"] = RouteStackClient(settings)
 
     conversation = ConversationHandler(
-        entry_points=[CommandHandler("search", begin_search)],
+        entry_points=[
+            CommandHandler("search", begin_search),
+            CommandHandler("flight", flight_command),
+        ],
         states={
             ORIGIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, origin)],
             DESTINATION: [

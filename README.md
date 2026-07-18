@@ -13,6 +13,10 @@ The bot does **not** search in the background and does **not** invent prices.
 - One-way and round-trip searches
 - Economy, premium economy, business, and first class
 - Optional ±3-day flexible-date comparison while preserving trip length
+- Top-three booking handoff buttons for the best overall, cheapest, and fastest
+  distinct recommendations
+- Live revalidation before RouteStack generates a secure external checkout link
+- Privacy-conscious click events in Railway logs for measuring popular routes
 - Optional nearby-airport comparison within roughly 100 km
 - Checked-bag, airline avoidance, budget, and optimization preferences
 - Best overall, cheapest, fastest, and flexible-date picks
@@ -69,6 +73,19 @@ For all supported one-line options:
 ```
 
 The bot still asks for confirmation before spending RouteStack search tokens.
+
+## Booking handoff
+
+The bot never collects passenger or payment details and never issues a ticket.
+After a search, users can choose one of the top three options. The bot revalidates
+that offer with RouteStack and returns a signed RouteStack hosted-checkout link.
+The final price, baggage allowance, and change/cancellation rules must be reviewed
+there before payment.
+
+Each handoff click writes an aggregate-friendly event to the application log with
+the route, result rank, and source. It deliberately does not log the Telegram user
+ID, passenger details, fare identifier, or checkout URL. In Railway, search the
+deployment logs for `booking_handoff_clicked` to see demand by route.
 
 ## Tests
 

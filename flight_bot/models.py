@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Any
 
 
 class Cabin(StrEnum):
@@ -63,6 +64,8 @@ class FlightOption:
     checked_bags: int | None
     source: str = "RouteStack"
     bookable_seats: int | None = None
+    booking_payload: dict[str, Any] | None = field(default=None, repr=False)
+    search_filter: dict[str, Any] | None = field(default=None, repr=False)
     score: float = 0.0
     warnings: list[str] = field(default_factory=list)
 

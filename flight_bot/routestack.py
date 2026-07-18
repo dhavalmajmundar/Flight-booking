@@ -9,6 +9,7 @@ import secrets
 import time
 from datetime import date, datetime, timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -299,7 +300,13 @@ class RouteStackClient:
             if not isinstance(raw, dict):
                 continue
             option = self._parse_offer(
-                raw, currency, index, origin, destination, returning is not None
+                raw,
+                currency,
+                index,
+                origin,
+                destination,
+                returning is not None,
+                payload.get("searchFilterObj"),
             )
             if option:
                 parsed.append(option)
@@ -313,6 +320,7 @@ class RouteStackClient:
         origin: str,
         destination: str,
         round_trip: bool,
+        search_filter: Any = None,
     ) -> FlightOption | None:
         raw_segments = raw.get("flights") or raw.get("segments") or []
         if not isinstance(raw_segments, list) or not raw_segments:
@@ -455,4 +463,60 @@ class RouteStackClient:
             currency=currency,
             checked_bags=checked_bags,
             source="RouteStack",
+            booking_payload=raw,
+            search_filter=(
+                search_filter if isinstance(search_filter, dict) else None
+            ),
         )
+
+    async def create_checkout_url(
+        self, option: FlightOption, request: SearchRequest
+    ) -> str:
+        """Revalidate an offer and create RouteStack's external checkout URL."""
+        if not option.booking_payload:
+            raise FlightSearchError(
+                "This result did not include the data needed for checkout."
+            )
+
+        revalidate_body: dict[str, Any] = {
+            "fareSourceCode": option.offer_id,
+            "searchListPrice": option.booking_payload,
+        }
+        if option.search_filter:
+            revalidate_body["searchFilterObj"] = option.search_filter
+
+        revalidated = await self._post(
+            "/mcp/flight/revalidate", revalidate_body
+        )
+        revalidated_flight = (
+            revalidated.get("result")
+            or revalidated.get("revalidate")
+            or option.booking_payload
+        )
+        first_leg = option.legs[0]
+        payment_body: dict[str, Any] = {
+            "flight": revalidated_flight,
+            "origin": first_leg.origin,
+            "destination": first_leg.destination,
+            "departureDate": first_leg.departure.date().isoformat(),
+            "adults": request.adults,
+            "cabinClass": request.cabin.value,
+            "currency": request.currency,
+        }
+        if request.return_date:
+            payment_body["returnDate"] = request.return_date.isoformat()
+
+        payload = await self._post(
+            "/mcp/flight/get-payment-url", payment_body
+        )
+        result = payload.get("result")
+        url = (
+            payload.get("url")
+            or (result.get("url") if isinstance(result, dict) else None)
+            or (result if isinstance(result, str) else None)
+        )
+        if not isinstance(url, str) or urlparse(url).scheme != "https":
+            raise FlightSearchError(
+                "RouteStack did not return a secure checkout link."
+            )
+        return url

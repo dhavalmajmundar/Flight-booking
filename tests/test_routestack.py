@@ -1,6 +1,8 @@
-from datetime import date
+import asyncio
+from datetime import date, datetime
 
 from flight_bot.config import Settings
+from flight_bot.models import Cabin, FlightOption, Leg, SearchRequest
 from flight_bot.routestack import RouteStackClient
 
 
@@ -53,6 +55,7 @@ def test_parse_one_way_offer() -> None:
     assert option.legs[0].stops == 1
     assert option.legs[0].layovers == (("ORD", 60),)
     assert option.source == "RouteStack"
+    assert option.booking_payload == raw
 
 
 def test_parse_round_trip_offer() -> None:
@@ -80,3 +83,56 @@ def test_parse_round_trip_offer() -> None:
     assert option is not None
     assert len(option.legs) == 2
     assert option.legs[1].destination == "JFK"
+
+
+def test_create_checkout_url_revalidates_before_handoff() -> None:
+    client = RouteStackClient(settings())
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_post(path: str, body: dict) -> dict:
+        calls.append((path, body))
+        if path.endswith("/revalidate"):
+            return {"revalidate": {"fresh": True}}
+        return {"success": True, "url": "https://evolve.routestack.ai/checkout"}
+
+    client._post = fake_post  # type: ignore[method-assign]
+    option = FlightOption(
+        offer_id="fare-1",
+        airlines=("Test Air",),
+        airline_codes=("TA",),
+        legs=(
+            Leg(
+                origin="JFK",
+                destination="LAX",
+                departure=datetime(2026, 11, 6, 8),
+                arrival=datetime(2026, 11, 6, 11),
+                duration_minutes=180,
+                stops=0,
+            ),
+        ),
+        total_price=250,
+        currency="USD",
+        checked_bags=1,
+        booking_payload={"fareSourceCode": "fare-1"},
+        search_filter={"adults": 1},
+    )
+    request = SearchRequest(
+        origin="JFK",
+        destination="LAX",
+        departure_date=date(2026, 11, 6),
+        return_date=None,
+        adults=1,
+        cabin=Cabin.ECONOMY,
+        flexible_dates=False,
+        nearby_airports=False,
+        checked_bags=0,
+    )
+
+    url = asyncio.run(client.create_checkout_url(option, request))
+
+    assert url == "https://evolve.routestack.ai/checkout"
+    assert calls[0][0] == "/mcp/flight/revalidate"
+    assert calls[0][1]["fareSourceCode"] == "fare-1"
+    assert calls[1][0] == "/mcp/flight/get-payment-url"
+    assert calls[1][1]["flight"] == {"fresh": True}
+    asyncio.run(client.close())

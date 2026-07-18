@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 from datetime import date
 
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -16,8 +24,8 @@ from telegram.ext import (
 )
 
 from .config import Settings
-from .formatting import format_results
-from .models import Cabin, Priority, SearchRequest
+from .formatting import format_results, selected_results
+from .models import Cabin, FlightOption, Priority, SearchRequest
 from .ranking import rank_flights
 from .routestack import FlightSearchError, RouteStackClient
 
@@ -489,6 +497,9 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 message,
                 parse_mode=ParseMode.HTML,
                 disable_web_page_preview=True,
+                reply_markup=_booking_keyboard(
+                    _store_booking_options(context, results, request)
+                ),
             )
     except FlightSearchError as exc:
         logger.warning("Flight search failed: %s", exc)
@@ -505,6 +516,101 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     finally:
         context.user_data.pop("trip", None)
     return ConversationHandler.END
+
+
+def _store_booking_options(
+    context: ContextTypes.DEFAULT_TYPE,
+    results,
+    request: SearchRequest,
+) -> tuple[str, int]:
+    options = [
+        option
+        for option in selected_results(results, limit=3)
+        if option.booking_payload
+    ]
+    token = secrets.token_urlsafe(6)
+    handoffs = context.user_data.setdefault("booking_handoffs", {})
+    handoffs[token] = {
+        "request": request,
+        "options": options,
+    }
+    while len(handoffs) > 3:
+        handoffs.pop(next(iter(handoffs)))
+    return token, len(options)
+
+
+def _booking_keyboard(
+    handoff: tuple[str, int]
+) -> InlineKeyboardMarkup | None:
+    token, option_count = handoff
+    if not option_count:
+        return None
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"Check & book option #{rank}",
+                    callback_data=f"checkout:{token}:{rank - 1}",
+                )
+            ]
+            for rank in range(1, option_count + 1)
+        ]
+    )
+
+
+async def checkout_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    try:
+        _, token, raw_index = query.data.split(":", 2)
+        index = int(raw_index)
+    except (AttributeError, ValueError, IndexError):
+        await query.message.reply_text("That booking selection is invalid.")
+        return
+
+    handoff = (
+        context.user_data.get("booking_handoffs", {}).get(token) or {}
+    )
+    options: list[FlightOption] = handoff.get("options") or []
+    request: SearchRequest | None = handoff.get("request")
+    if request is None or not 0 <= index < len(options):
+        await query.message.reply_text(
+            "These results are no longer available. Run a new /search so the "
+            "price can be checked again."
+        )
+        return
+
+    option = options[index]
+    logger.info(
+        "booking_handoff_clicked route=%s-%s rank=%d source=%s",
+        option.legs[0].origin,
+        option.legs[0].destination,
+        index + 1,
+        option.source,
+    )
+    await query.message.reply_text(
+        f"Rechecking option #{index + 1}'s live price and availability…"
+    )
+    client: RouteStackClient = context.application.bot_data["routestack"]
+    try:
+        url = await client.create_checkout_url(option, request)
+    except FlightSearchError as exc:
+        logger.warning("Checkout handoff failed: %s", exc)
+        await query.message.reply_text(
+            f"I couldn't create a current checkout link: {exc}\n"
+            "Please run a new search. No booking or charge was made."
+        )
+        return
+    await query.message.reply_text(
+        "The fare was rechecked. Continue on RouteStack's secure hosted checkout "
+        "to verify the final price, baggage and fare rules.\n\n"
+        "The Telegram bot does not collect payment or issue the ticket.",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Open secure checkout", url=url)]]
+        ),
+    )
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -567,5 +673,11 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(conversation)
+    application.add_handler(
+        CallbackQueryHandler(
+            checkout_callback,
+            pattern=r"^checkout:[A-Za-z0-9_-]{8}:\d+$",
+        )
+    )
     application.add_handler(MessageHandler(filters.TEXT, unknown))
     return application

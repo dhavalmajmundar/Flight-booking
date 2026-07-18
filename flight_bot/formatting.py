@@ -28,6 +28,22 @@ def _reason(option: FlightOption, results: RankedResults) -> str:
     return "; ".join(reasons) or "strong alternative"
 
 
+def selected_results(results: RankedResults, limit: int = 5) -> list[FlightOption]:
+    selected: list[FlightOption] = []
+    for option in [
+        results.best_overall,
+        results.cheapest,
+        results.fastest,
+        results.best_flexible,
+        *results.ordered,
+    ]:
+        if option and option not in selected:
+            selected.append(option)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def format_results(
     results: RankedResults,
     request: SearchRequest,
@@ -44,18 +60,7 @@ def format_results(
         if option:
             labels.setdefault(_option_key(option), []).append(label)
 
-    selected: list[FlightOption] = []
-    for option in [
-        results.best_overall,
-        results.cheapest,
-        results.fastest,
-        results.best_flexible,
-        *results.ordered,
-    ]:
-        if option and option not in selected:
-            selected.append(option)
-        if len(selected) >= 5:
-            break
+    selected = selected_results(results)
 
     lines = [
         "✈️ <b>Live flight comparison</b>",
@@ -114,7 +119,8 @@ def format_results(
             "Fastest when reduced travel time is worth any fare difference.",
             "",
             "Fares can change until ticketed. RouteStack is the search source; "
-            "revalidate the selected itinerary before using its hosted checkout. "
+            "the bot revalidates an itinerary before opening RouteStack's hosted "
+            "checkout. The bot does not take payment or issue tickets. "
             "Change/cancellation terms and exact bag fees must be verified at checkout.",
         ]
     )

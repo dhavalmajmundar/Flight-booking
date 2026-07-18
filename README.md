@@ -77,6 +77,9 @@ balanced ranking.
 Smart baggage requests 0 checked bags for domestic trips or 2 checked bags plus
 1 carry-on for international trips.
 
+The guided `/search` flow uses the same automatic nearby-airport rule without
+asking an additional question: enabled domestically and disabled internationally.
+
 For all supported one-line options:
 
 ```text

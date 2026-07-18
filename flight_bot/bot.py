@@ -378,11 +378,15 @@ async def flexible(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Please choose Yes or No.")
         return FLEXIBLE
     context.user_data["trip"]["flexible_dates"] = answer == "yes"
+    context.user_data["trip"]["nearby_airports"] = False
+    context.user_data["trip"]["auto_nearby"] = True
     await update.message.reply_text(
-        "Also compare nearby departure or arrival airports (within about 100 km)?",
-        reply_markup=_keyboard(("Yes", "No")),
+        "Nearby airports will be included automatically for domestic trips and "
+        "disabled for international trips.\n\n"
+        "How many checked bags must be included per traveler? (0–2)",
+        reply_markup=ReplyKeyboardRemove(),
     )
-    return NEARBY
+    return BAGS
 
 
 async def nearby(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

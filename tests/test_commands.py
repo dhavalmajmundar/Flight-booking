@@ -1,8 +1,11 @@
+import asyncio
 from datetime import date, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from flight_bot.bot import parse_flight_command
+from flight_bot.bot import BAGS, flexible, parse_flight_command
 from flight_bot.models import Cabin, Priority
 
 
@@ -88,3 +91,15 @@ def test_one_way_and_manual_baggage_override() -> None:
     assert trip["checked_bags"] == 1
     assert trip["carry_on_bags"] == 0
     assert trip["auto_nearby"] is False
+
+
+def test_guided_search_uses_automatic_nearby_default() -> None:
+    message = SimpleNamespace(text="Yes", reply_text=AsyncMock())
+    update = SimpleNamespace(message=message)
+    context = SimpleNamespace(user_data={"trip": {}})
+
+    next_state = asyncio.run(flexible(update, context))
+
+    assert next_state == BAGS
+    assert context.user_data["trip"]["nearby_airports"] is False
+    assert context.user_data["trip"]["auto_nearby"] is True

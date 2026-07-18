@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Telegram bot that searches and ranks live RouteStack flight offers on demand."
 requires-python = ">=3.11"
 dependencies = [
+  "airportsdata>=2026.3.15,<2027",
   "httpx>=0.27,<1",
   "python-dotenv>=1.0,<2",
   "python-telegram-bot>=21.6,<23",

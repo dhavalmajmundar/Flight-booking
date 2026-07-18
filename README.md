@@ -10,6 +10,10 @@ The bot does **not** search in the background and does **not** invent prices.
 
 - Guided `/search` conversation
 - One-line `/flight` command with optional filters
+- Smart `/flight` defaults: 7-night round trip, one adult, economy, flexible
+  dates, no nearby airports, and route-aware baggage
+- Local IATA airport/country resolution to avoid provider calls for exact codes
+- Five-minute identical-search cache with checkout-time fare revalidation
 - One-way and round-trip searches
 - Economy, premium economy, business, and first class
 - Optional ±3-day flexible-date comparison while preserving trip length
@@ -50,6 +54,7 @@ ROUTESTACK_API_SECRET=...
 ROUTESTACK_BASE_URL=https://mcp.routestack.ai
 DEFAULT_CURRENCY=USD
 MAX_RESULTS=40
+SEARCH_CACHE_SECONDS=300
 ```
 
 Run:
@@ -66,11 +71,19 @@ For a minimal one-line search:
 /flight JFK LAX 2026-09-15
 ```
 
+That command defaults to a round trip returning seven days later, one adult,
+economy, flexible dates within ±3 days, no nearby airports, and balanced ranking.
+Smart baggage requests 0 checked bags for domestic trips or 2 checked bags plus
+1 carry-on for international trips.
+
 For all supported one-line options:
 
 ```text
-/flight JFK LAX 2026-09-15 --return 2026-09-20 --adults 2 --cabin economy --flex yes --nearby no --bags 1 --prefer DL,UA --avoid NK,F9 --budget 1200 --priority balanced
+/flight JFK LAX 2026-09-15 --return 2026-09-20 --adults 2 --cabin economy --flex yes --nearby no --bags 1 --carry-on 1 --prefer DL,UA --avoid NK,F9 --budget 1200 --priority balanced
 ```
+
+Use `--nights 5` for a five-night round trip, `--trip one-way` for one-way,
+or `--bags auto` to restore route-aware baggage after a manual override.
 
 The bot still asks for confirmation before spending RouteStack search tokens.
 
@@ -116,6 +129,10 @@ docker run --env-file .env --restart unless-stopped flight-bot
 
 - Flexible-date mode makes up to seven provider searches: the requested dates and
   matching trip-length shifts from three days earlier through three days later.
+- Exact three-letter airport codes are resolved from a bundled local database,
+  avoiding RouteStack location calls. City codes and names fall back to RouteStack.
+- Identical date/route searches are cached for five minutes. Cached results are
+  labeled, and a selected fare is always revalidated before checkout.
 - Nearby-airport mode checks up to two alternatives at each end on the requested
   dates. It deliberately avoids a large date × airport combination search.
 - RouteStack prices one completed search as one token. Combining flexible dates

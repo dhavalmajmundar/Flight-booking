@@ -31,6 +31,8 @@ class SearchRequest:
     flexible_dates: bool
     nearby_airports: bool
     checked_bags: int
+    carry_on_bags: int = 1
+    auto_baggage: bool = False
     preferred_airlines: set[str] = field(default_factory=set)
     avoided_airlines: set[str] = field(default_factory=set)
     max_budget: float | None = None
@@ -62,6 +64,7 @@ class FlightOption:
     total_price: float
     currency: str
     checked_bags: int | None
+    carry_on_bags: int | None = None
     source: str = "RouteStack"
     bookable_seats: int | None = None
     booking_payload: dict[str, Any] | None = field(default=None, repr=False)

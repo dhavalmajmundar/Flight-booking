@@ -136,3 +136,57 @@ def test_create_checkout_url_revalidates_before_handoff() -> None:
     assert calls[1][0] == "/mcp/flight/get-payment-url"
     assert calls[1][1]["flight"] == {"fresh": True}
     asyncio.run(client.close())
+
+
+def test_identical_search_uses_short_lived_cache() -> None:
+    client = RouteStackClient(settings())
+    calls = 0
+
+    async def fake_post(path: str, body: dict) -> dict:
+        nonlocal calls
+        calls += 1
+        return {
+            "currency": "USD",
+            "result": [
+                {
+                    "fareSourceCode": "cached-fare",
+                    "showOurprice": 200,
+                    "flights": [
+                        {
+                            "departure": "JFK",
+                            "arrival": "LAX",
+                            "departureTime": "2026-11-06T08:00:00",
+                            "arrivalTime": "2026-11-06T11:00:00",
+                        }
+                    ],
+                }
+            ],
+        }
+
+    client._post = fake_post  # type: ignore[method-assign]
+    search_request = SearchRequest(
+        origin="JFK",
+        destination="LAX",
+        departure_date=date(2026, 11, 6),
+        return_date=None,
+        adults=1,
+        cabin=Cabin.ECONOMY,
+        flexible_dates=False,
+        nearby_airports=False,
+        checked_bags=0,
+    )
+
+    async def run_twice() -> tuple[list[FlightOption], list[FlightOption]]:
+        first = await client._search_dates(
+            search_request, "JFK", "LAX", date(2026, 11, 6), None
+        )
+        second = await client._search_dates(
+            search_request, "JFK", "LAX", date(2026, 11, 6), None
+        )
+        await client.close()
+        return first, second
+
+    first, second = asyncio.run(run_twice())
+    assert calls == 1
+    assert first[0].offer_id == second[0].offer_id
+    assert any("cached fare" in warning.lower() for warning in second[0].warnings)

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import time
@@ -14,6 +16,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import Settings
+from .airports import local_airport, smart_baggage
 from .models import FlightOption, Leg, SearchRequest
 
 
@@ -64,6 +67,12 @@ class RouteStackClient:
         )
         self._token: str | None = None
         self._token_expires_at = 0.0
+        self._location_cache: dict[
+            tuple[str, bool], tuple[str, str, list[str], str]
+        ] = {}
+        self._search_cache: dict[
+            str, tuple[float, list[FlightOption]]
+        ] = {}
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -138,9 +147,21 @@ class RouteStackClient:
         return payload
 
     async def resolve_location(
-        self, query: str
-    ) -> tuple[str, str, list[str]]:
+        self, query: str, find_alternatives: bool = False
+    ) -> tuple[str, str, list[str], str]:
         normalized = query.strip().upper()
+        cache_key = (normalized, find_alternatives)
+        cached = self._location_cache.get(cache_key)
+        if cached:
+            return cached
+
+        local = local_airport(query)
+        if local and not find_alternatives:
+            code, label, country = local
+            result = (code, label, [], country)
+            self._location_cache[cache_key] = result
+            return result
+
         payload = await self._post(
             "/mcp/flight/locations", {"term": query.strip()}
         )
@@ -156,7 +177,7 @@ class RouteStackClient:
         elif locations:
             best = locations[0]
         elif re.fullmatch(r"[A-Z]{3}", normalized):
-            return normalized, normalized, []
+            return normalized, normalized, [], ""
         else:
             raise FlightSearchError(
                 f"I couldn't find an airport or city for “{query}”."
@@ -168,6 +189,7 @@ class RouteStackClient:
                 f"No searchable airport code was found for “{query}”."
             )
         label = best.get("fullname") or best.get("name") or code
+        country = str(best.get("country") or "").strip().upper()
         alternatives: list[str] = []
         for item in locations:
             alternate = str(item.get("code", "")).upper()
@@ -179,17 +201,33 @@ class RouteStackClient:
                 alternatives.append(alternate)
             if len(alternatives) == 2:
                 break
-        return code, str(label), alternatives
+        result = (code, str(label), alternatives, country)
+        self._location_cache[cache_key] = result
+        return result
 
     async def search(
         self, request: SearchRequest
     ) -> tuple[list[FlightOption], str, str]:
         origin_result, destination_result = await asyncio.gather(
-            self.resolve_location(request.origin),
-            self.resolve_location(request.destination),
+            self.resolve_location(request.origin, request.nearby_airports),
+            self.resolve_location(request.destination, request.nearby_airports),
         )
-        origin_code, origin_label, nearby_origins = origin_result
-        destination_code, destination_label, nearby_destinations = destination_result
+        origin_code, origin_label, nearby_origins, origin_country = origin_result
+        (
+            destination_code,
+            destination_label,
+            nearby_destinations,
+            destination_country,
+        ) = destination_result
+
+        if request.auto_baggage:
+            (
+                request.checked_bags,
+                request.carry_on_bags,
+            ) = smart_baggage(
+                origin_country,
+                destination_country,
+            )
 
         shifts = range(-3, 4) if request.flexible_dates else (0,)
         searches = []
@@ -285,6 +323,21 @@ class RouteStackClient:
         }
         if returning:
             body["returnDate"] = returning.isoformat()
+        cache_key = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        cached = self._search_cache.get(cache_key)
+        now = time.monotonic()
+        if (
+            cached
+            and self.settings.search_cache_seconds > 0
+            and now - cached[0] <= self.settings.search_cache_seconds
+        ):
+            cached_offers = copy.deepcopy(cached[1])
+            for offer in cached_offers:
+                offer.warnings.append(
+                    "Short-lived cached fare; price is rechecked before checkout"
+                )
+            return cached_offers
+
         payload = await self._post("/mcp/flight/search", body)
         raw_results = payload.get("result") or []
         if isinstance(raw_results, dict):
@@ -310,6 +363,15 @@ class RouteStackClient:
             )
             if option:
                 parsed.append(option)
+        if self.settings.search_cache_seconds > 0:
+            self._search_cache[cache_key] = (now, copy.deepcopy(parsed))
+            expired = [
+                key
+                for key, (created, _) in self._search_cache.items()
+                if now - created > self.settings.search_cache_seconds
+            ]
+            for key in expired:
+                self._search_cache.pop(key, None)
         return parsed
 
     @staticmethod
@@ -450,6 +512,16 @@ class RouteStackClient:
         if isinstance(bags, dict):
             bags = bags.get("quantity")
         checked_bags = int(bags) if isinstance(bags, (int, float)) else None
+        carry_on = (
+            raw.get("includedCarryOnBags")
+            or raw.get("includedCabinBags")
+            or raw.get("carryOnBaggage")
+        )
+        if isinstance(carry_on, dict):
+            carry_on = carry_on.get("quantity")
+        carry_on_bags = (
+            int(carry_on) if isinstance(carry_on, (int, float)) else None
+        )
         offer_id = str(
             raw.get("fareSourceCode") or raw.get("id") or f"routestack-{index}"
         )
@@ -462,6 +534,7 @@ class RouteStackClient:
             total_price=price,
             currency=currency,
             checked_bags=checked_bags,
+            carry_on_bags=carry_on_bags,
             source="RouteStack",
             booking_payload=raw,
             search_filter=(

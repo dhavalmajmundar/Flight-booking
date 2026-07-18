@@ -14,6 +14,7 @@ class Settings:
     routestack_base_url: str = "https://mcp.routestack.ai"
     default_currency: str = "USD"
     max_results: int = 40
+    search_cache_seconds: int = 300
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -40,4 +41,7 @@ class Settings:
             ).strip(),
             default_currency=os.getenv("DEFAULT_CURRENCY", "USD").strip().upper(),
             max_results=max(5, min(int(os.getenv("MAX_RESULTS", "40")), 100)),
+            search_cache_seconds=max(
+                0, min(int(os.getenv("SEARCH_CACHE_SECONDS", "300")), 900)
+            ),
         )

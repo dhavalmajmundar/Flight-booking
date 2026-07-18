@@ -57,6 +57,14 @@ def rank_flights(
                 offer.warnings.append(
                     f"Only {offer.checked_bags} checked bag(s) shown as included"
                 )
+        if request.carry_on_bags > 0:
+            if offer.carry_on_bags is None:
+                offer.warnings.append("Carry-on allowance not clearly reported")
+            elif offer.carry_on_bags < request.carry_on_bags:
+                score += 0.08
+                offer.warnings.append(
+                    f"Only {offer.carry_on_bags} carry-on bag(s) shown as included"
+                )
         if offer.stops >= 2:
             offer.warnings.append("Multiple connections increase disruption risk")
         for leg in offer.legs:

@@ -99,9 +99,14 @@ def format_results(
             if option.checked_bags is not None
             else "not clearly reported—verify before payment"
         )
+        carry_on = (
+            f"{option.carry_on_bags} carry-on bag(s) shown included"
+            if option.carry_on_bags is not None
+            else "carry-on allowance not clearly reported"
+        )
         lines.extend(
             [
-                f"<b>Baggage:</b> {baggage}",
+                f"<b>Baggage:</b> {baggage}; {carry_on}",
                 f"<b>Total:</b> {option.currency} {option.total_price:,.2f}",
                 f"<b>Source:</b> {option.source} live API",
                 f"<b>Why:</b> {_reason(option, results)}",

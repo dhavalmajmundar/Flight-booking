@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from datetime import date
+from datetime import date, timedelta
 
 from telegram import (
     InlineKeyboardButton,
@@ -67,9 +67,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "priority. No provider search happens until you confirm.\n\n"
         "For a one-line request:\n"
         "/flight JFK LAX 2026-09-15\n\n"
-        "Add options such as --return 2026-09-20 --adults 2 --cabin business "
-        "--flex yes --nearby no --bags 1 --prefer DL,UA --avoid NK,F9 "
-        "--budget 1200 --priority balanced\n\n"
+        "Smart defaults: round trip returning after 7 nights, 1 adult, economy, "
+        "flexible dates, no nearby airports, and automatic baggage (0 checked "
+        "domestic; 2 checked + 1 carry-on international).\n\n"
+        "Override with options such as --return 2026-09-20 --nights 5 "
+        "--trip one-way --adults 2 --cabin business --flex no --nearby yes "
+        "--bags 1 --carry-on 1 --prefer DL,UA --avoid NK,F9 --budget 1200 "
+        "--priority balanced\n\n"
         "Airport codes such as JFK work best, but city or airport names are accepted."
     )
 
@@ -109,12 +113,14 @@ def parse_flight_command(args: list[str]) -> dict:
         "origin": args[0],
         "destination": args[1],
         "departure_date": departure_value,
-        "return_date": None,
+        "return_date": departure_value + timedelta(days=7),
         "adults": 1,
         "cabin": Cabin.ECONOMY,
-        "flexible_dates": False,
+        "flexible_dates": True,
         "nearby_airports": False,
         "checked_bags": 0,
+        "carry_on_bags": 1,
+        "auto_baggage": True,
         "preferred_airlines": set(),
         "avoided_airlines": set(),
         "max_budget": None,
@@ -122,11 +128,14 @@ def parse_flight_command(args: list[str]) -> dict:
     }
     value_options = {
         "--return",
+        "--nights",
+        "--trip",
         "--adults",
         "--cabin",
         "--flex",
         "--nearby",
         "--bags",
+        "--carry-on",
         "--prefer",
         "--avoid",
         "--budget",
@@ -146,6 +155,25 @@ def parse_flight_command(args: list[str]) -> dict:
             if not parsed or parsed <= trip["departure_date"]:
                 raise ValueError("--return must be after departure")
             trip["return_date"] = parsed
+        elif option == "--nights":
+            try:
+                nights = int(value)
+            except ValueError as exc:
+                raise ValueError("--nights must be a number from 1 to 365") from exc
+            if not 1 <= nights <= 365:
+                raise ValueError("--nights must be a number from 1 to 365")
+            trip["return_date"] = trip["departure_date"] + timedelta(days=nights)
+        elif option == "--trip":
+            trip_type = value.lower().replace("_", "-")
+            if trip_type in {"one-way", "oneway"}:
+                trip["return_date"] = None
+            elif trip_type in {"round-trip", "roundtrip"}:
+                trip["return_date"] = (
+                    trip["return_date"]
+                    or trip["departure_date"] + timedelta(days=7)
+                )
+            else:
+                raise ValueError("--trip must be one-way or round-trip")
         elif option == "--adults":
             try:
                 adults = int(value)
@@ -172,6 +200,10 @@ def parse_flight_command(args: list[str]) -> dict:
         elif option == "--nearby":
             trip["nearby_airports"] = _yes_no(value, "--nearby")
         elif option == "--bags":
+            if value.lower() == "auto":
+                trip["auto_baggage"] = True
+                index += 2
+                continue
             try:
                 bags = int(value)
             except ValueError as exc:
@@ -179,6 +211,15 @@ def parse_flight_command(args: list[str]) -> dict:
             if bags not in {0, 1, 2}:
                 raise ValueError("--bags must be 0, 1, or 2")
             trip["checked_bags"] = bags
+            trip["auto_baggage"] = False
+        elif option == "--carry-on":
+            try:
+                carry_on = int(value)
+            except ValueError as exc:
+                raise ValueError("--carry-on must be 0, 1, or 2") from exc
+            if carry_on not in {0, 1, 2}:
+                raise ValueError("--carry-on must be 0, 1, or 2")
+            trip["carry_on_bags"] = carry_on
         elif option == "--prefer":
             trip["preferred_airlines"] = _airline_codes(value, "--prefer")
         elif option == "--avoid":
@@ -211,8 +252,9 @@ async def flight_command(
         await update.message.reply_text(
             f"Invalid flight command: {exc}\n\n"
             "Example:\n"
-            "/flight JFK LAX 2026-09-15 --adults 1 --cabin economy "
-            "--flex no --nearby no --bags 0 --priority balanced"
+            "/flight JFK LAX 2026-09-15\n\n"
+            "This defaults to a 7-night round trip, 1 adult, economy, flexible "
+            "dates, no nearby airports, and smart domestic/international baggage."
         )
         return ConversationHandler.END
     context.user_data["trip"] = trip
@@ -358,6 +400,8 @@ async def bags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Enter 0, 1, or 2.")
         return BAGS
     context.user_data["trip"]["checked_bags"] = count
+    context.user_data["trip"]["carry_on_bags"] = 1
+    context.user_data["trip"]["auto_baggage"] = False
     await update.message.reply_text(
         "Airline preferences? Use IATA codes like:\n"
         "prefer: DL,UA; avoid: F9,NK\n\n"
@@ -449,6 +493,14 @@ async def show_confirmation(
     maximum_provider_calls = (7 if trip["flexible_dates"] else 1) + (
         4 if trip["nearby_airports"] else 0
     )
+    baggage_text = (
+        "smart: 0 checked domestic; 2 checked + 1 carry-on international"
+        if trip.get("auto_baggage")
+        else (
+            f"{trip['checked_bags']} checked + "
+            f"{trip.get('carry_on_bags', 1)} carry-on each"
+        )
+    )
     await update.message.reply_text(
         "Please confirm:\n"
         f"{trip['origin']} → {trip['destination']}\n"
@@ -456,7 +508,7 @@ async def show_confirmation(
         f"{trip['adults']} adult(s) | {trip['cabin'].value.replace('_', ' ').title()}\n"
         f"Flexible: {'yes, ±3 days' if trip['flexible_dates'] else 'no'} | "
         f"Nearby airports: {'yes' if trip['nearby_airports'] else 'no'} | "
-        f"Checked bags: {trip['checked_bags']} each\n"
+        f"Baggage: {baggage_text}\n"
         f"Budget: {budget_text} | Priority: {trip['priority'].value}\n\n"
         f"RouteStack usage: up to {maximum_provider_calls} search token(s).\n\n"
         "Search live fares now?",

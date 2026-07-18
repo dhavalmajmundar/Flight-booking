@@ -9,8 +9,9 @@ Last updated: 2026-07-18
 - Hosting: Railway, connected to GitHub for automatic deployments
 - Runtime: Python Telegram bot using long polling
 - Flight provider: RouteStack
-- Latest functional commit before this handoff update: `01f26d6`
-- Verification: 19 automated tests passing
+- Handoff policy: update this file in every completed change; use `git log -1`
+  for the commit containing the latest handoff
+- Verification: 21 automated tests passing
 
 ## User experience
 
@@ -36,6 +37,10 @@ Last updated: 2026-07-18
 - Results identify best overall, cheapest, fastest, and flexible-date options.
 - Up to three distinct results can be revalidated and opened in RouteStack's
   hosted checkout.
+- Each top result also provides an Expedia comparison search for the same route,
+  option dates, passenger count, cabin, and airline when a single code is known.
+- RouteStack is labeled as the exact revalidated offer. Expedia is labeled as a
+  separate comparison whose itinerary and price may differ.
 - Telegram never collects payment details or issues tickets.
 
 ## API-usage safeguards
@@ -55,6 +60,7 @@ Last updated: 2026-07-18
   offer parsing, revalidation, and checkout links
 - `flight_bot/ranking.py`: price/time/stop ranking and cheapest-date calculation
 - `flight_bot/formatting.py`: Telegram result presentation
+- `flight_bot/links.py`: documented external comparison deeplinks
 - `flight_bot/airports.py`: local airport and country helpers
 - `flight_bot/config.py`: environment configuration
 - `tests/`: automated regression tests

@@ -26,6 +26,7 @@ from telegram.ext import (
 from .config import Settings
 from .airports import is_domestic, local_airport
 from .formatting import format_results, selected_results
+from .links import expedia_search_url
 from .models import Cabin, FlightOption, Priority, SearchRequest
 from .ranking import rank_flights
 from .routestack import FlightSearchError, RouteStackClient
@@ -685,7 +686,7 @@ def _store_booking_options(
     context: ContextTypes.DEFAULT_TYPE,
     results,
     request: SearchRequest,
-) -> tuple[str, int]:
+) -> tuple[str, list[FlightOption], SearchRequest]:
     options = [
         option
         for option in selected_results(results, limit=3)
@@ -699,24 +700,28 @@ def _store_booking_options(
     }
     while len(handoffs) > 3:
         handoffs.pop(next(iter(handoffs)))
-    return token, len(options)
+    return token, options, request
 
 
 def _booking_keyboard(
-    handoff: tuple[str, int]
+    handoff: tuple[str, list[FlightOption], SearchRequest]
 ) -> InlineKeyboardMarkup | None:
-    token, option_count = handoff
-    if not option_count:
+    token, options, request = handoff
+    if not options:
         return None
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    f"Check & book option #{rank}",
+                    f"Exact option #{rank}",
                     callback_data=f"checkout:{token}:{rank - 1}",
-                )
+                ),
+                InlineKeyboardButton(
+                    f"Expedia #{rank}",
+                    url=expedia_search_url(option, request),
+                ),
             ]
-            for rank in range(1, option_count + 1)
+            for rank, option in enumerate(options, 1)
         ]
     )
 
@@ -763,15 +768,36 @@ async def checkout_callback(
         logger.warning("Checkout handoff failed: %s", exc)
         await query.message.reply_text(
             f"I couldn't create a current checkout link: {exc}\n"
-            "Please run a new search. No booking or charge was made."
+            "No booking or charge was made. You can compare the same route, "
+            "dates, cabin, and airline on Expedia, but its fare may differ.",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "Compare on Expedia",
+                            url=expedia_search_url(option, request),
+                        )
+                    ]
+                ]
+            ),
         )
         return
     await query.message.reply_text(
         "The fare was rechecked. Continue on RouteStack's secure hosted checkout "
         "to verify the final price, baggage and fare rules.\n\n"
+        "Expedia opens a separate search for the same trip and airline; it may "
+        "show a different itinerary or price.\n\n"
         "The Telegram bot does not collect payment or issue the ticket.",
         reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("Open secure checkout", url=url)]]
+            [
+                [InlineKeyboardButton("Open exact RouteStack offer", url=url)],
+                [
+                    InlineKeyboardButton(
+                        "Compare on Expedia",
+                        url=expedia_search_url(option, request),
+                    )
+                ],
+            ]
         ),
     )
 

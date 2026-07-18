@@ -20,6 +20,8 @@ The bot does **not** search in the background and does **not** invent prices.
 - Top-three booking handoff buttons for the best overall, cheapest, and fastest
   distinct recommendations
 - Live revalidation before RouteStack generates a secure external checkout link
+- Expedia comparison deeplinks for the same route, travel dates, passengers,
+  cabin, and single operating airline when available
 - Privacy-conscious click events in Railway logs for measuring popular routes
 - Optional nearby-airport comparison within roughly 100 km
 - Checked-bag, airline avoidance, budget, and optimization preferences
@@ -107,6 +109,11 @@ After a search, users can choose one of the top three options. The bot revalidat
 that offer with RouteStack and returns a signed RouteStack hosted-checkout link.
 The final price, baggage allowance, and change/cancellation rules must be reviewed
 there before payment.
+
+Each top option also has an Expedia comparison button built from Expedia's
+documented flight deeplink format. RouteStack is the revalidated selected offer;
+Expedia performs a separate search and may show a different itinerary, baggage
+allowance, or price. No affiliate or price-match claim is made.
 
 Each handoff click writes an aggregate-friendly event to the application log with
 the route, result rank, and source. It deliberately does not log the Telegram user

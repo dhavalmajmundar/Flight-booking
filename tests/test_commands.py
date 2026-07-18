@@ -18,6 +18,7 @@ def test_minimal_flight_command_uses_safe_defaults() -> None:
     assert trip["cabin"] == Cabin.ECONOMY
     assert trip["flexible_dates"] is True
     assert trip["nearby_airports"] is False
+    assert trip["auto_nearby"] is True
     assert trip["auto_baggage"] is True
     assert trip["carry_on_bags"] == 1
     assert trip["priority"] == Priority.BALANCED
@@ -78,9 +79,12 @@ def test_one_way_and_manual_baggage_override() -> None:
             "1",
             "--carry-on",
             "0",
+            "--nearby",
+            "no",
         ]
     )
     assert trip["return_date"] is None
     assert trip["auto_baggage"] is False
     assert trip["checked_bags"] == 1
     assert trip["carry_on_bags"] == 0
+    assert trip["auto_nearby"] is False

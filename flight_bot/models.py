@@ -33,6 +33,7 @@ class SearchRequest:
     checked_bags: int
     carry_on_bags: int = 1
     auto_baggage: bool = False
+    auto_nearby: bool = False
     preferred_airlines: set[str] = field(default_factory=set)
     avoided_airlines: set[str] = field(default_factory=set)
     max_budget: float | None = None

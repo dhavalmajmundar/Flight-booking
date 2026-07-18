@@ -68,7 +68,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "For a one-line request:\n"
         "/flight JFK LAX 2026-09-15\n\n"
         "Smart defaults: round trip returning after 7 nights, 1 adult, economy, "
-        "flexible dates, no nearby airports, and automatic baggage (0 checked "
+        "flexible dates, nearby airports for domestic trips only, and automatic "
+        "baggage (0 checked "
         "domestic; 2 checked + 1 carry-on international).\n\n"
         "Override with options such as --return 2026-09-20 --nights 5 "
         "--trip one-way --adults 2 --cabin business --flex no --nearby yes "
@@ -118,6 +119,7 @@ def parse_flight_command(args: list[str]) -> dict:
         "cabin": Cabin.ECONOMY,
         "flexible_dates": True,
         "nearby_airports": False,
+        "auto_nearby": True,
         "checked_bags": 0,
         "carry_on_bags": 1,
         "auto_baggage": True,
@@ -198,7 +200,12 @@ def parse_flight_command(args: list[str]) -> dict:
         elif option == "--flex":
             trip["flexible_dates"] = _yes_no(value, "--flex")
         elif option == "--nearby":
-            trip["nearby_airports"] = _yes_no(value, "--nearby")
+            if value.lower() == "auto":
+                trip["nearby_airports"] = False
+                trip["auto_nearby"] = True
+            else:
+                trip["nearby_airports"] = _yes_no(value, "--nearby")
+                trip["auto_nearby"] = False
         elif option == "--bags":
             if value.lower() == "auto":
                 trip["auto_baggage"] = True
@@ -254,7 +261,7 @@ async def flight_command(
             "Example:\n"
             "/flight JFK LAX 2026-09-15\n\n"
             "This defaults to a 7-night round trip, 1 adult, economy, flexible "
-            "dates, no nearby airports, and smart domestic/international baggage."
+            "dates, domestic-only nearby airports, and smart baggage."
         )
         return ConversationHandler.END
     context.user_data["trip"] = trip
@@ -384,6 +391,7 @@ async def nearby(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Please choose Yes or No.")
         return NEARBY
     context.user_data["trip"]["nearby_airports"] = answer == "yes"
+    context.user_data["trip"]["auto_nearby"] = False
     await update.message.reply_text(
         "How many checked bags must be included per traveler? (0–2)",
         reply_markup=ReplyKeyboardRemove(),
@@ -491,7 +499,14 @@ async def show_confirmation(
         f"${trip['max_budget']:,.2f}" if trip["max_budget"] else "no maximum"
     )
     maximum_provider_calls = (7 if trip["flexible_dates"] else 1) + (
-        4 if trip["nearby_airports"] else 0
+        4
+        if trip["nearby_airports"] or trip.get("auto_nearby")
+        else 0
+    )
+    nearby_text = (
+        "smart: yes domestic; no international"
+        if trip.get("auto_nearby")
+        else ("yes" if trip["nearby_airports"] else "no")
     )
     baggage_text = (
         "smart: 0 checked domestic; 2 checked + 1 carry-on international"
@@ -507,7 +522,7 @@ async def show_confirmation(
         f"Depart: {trip['departure_date']} | Return: {return_text}\n"
         f"{trip['adults']} adult(s) | {trip['cabin'].value.replace('_', ' ').title()}\n"
         f"Flexible: {'yes, ±3 days' if trip['flexible_dates'] else 'no'} | "
-        f"Nearby airports: {'yes' if trip['nearby_airports'] else 'no'} | "
+        f"Nearby airports: {nearby_text} | "
         f"Baggage: {baggage_text}\n"
         f"Budget: {budget_text} | Priority: {trip['priority'].value}\n\n"
         f"RouteStack usage: up to {maximum_provider_calls} search token(s).\n\n"

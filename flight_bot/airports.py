@@ -29,9 +29,13 @@ def local_airport(query: str) -> tuple[str, str, str] | None:
 
 def smart_baggage(origin_country: str, destination_country: str) -> tuple[int, int]:
     """Return checked and carry-on defaults; unknown routes use the safer allowance."""
-    domestic = bool(
+    domestic = is_domestic(origin_country, destination_country)
+    return (0 if domestic else 2), 1
+
+
+def is_domestic(origin_country: str, destination_country: str) -> bool:
+    return bool(
         origin_country
         and destination_country
         and origin_country == destination_country
     )
-    return (0 if domestic else 2), 1

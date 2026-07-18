@@ -190,3 +190,40 @@ def test_identical_search_uses_short_lived_cache() -> None:
     assert calls == 1
     assert first[0].offer_id == second[0].offer_id
     assert any("cached fare" in warning.lower() for warning in second[0].warnings)
+
+
+def test_auto_nearby_is_on_domestic_and_off_international() -> None:
+    async def run_route(destination: str, destination_country: str) -> SearchRequest:
+        client = RouteStackClient(settings())
+
+        async def fake_resolve(query: str, find_alternatives: bool = False):
+            if query == "JFK":
+                alternatives = ["EWR"] if find_alternatives else []
+                return "JFK", "New York JFK", alternatives, "US"
+            return destination, destination, [], destination_country
+
+        async def fake_search_dates(*args, **kwargs):
+            return []
+
+        client.resolve_location = fake_resolve  # type: ignore[method-assign]
+        client._search_dates = fake_search_dates  # type: ignore[method-assign]
+        search_request = SearchRequest(
+            origin="JFK",
+            destination=destination,
+            departure_date=date(2026, 11, 6),
+            return_date=date(2026, 11, 13),
+            adults=1,
+            cabin=Cabin.ECONOMY,
+            flexible_dates=False,
+            nearby_airports=False,
+            checked_bags=0,
+            auto_nearby=True,
+        )
+        await client.search(search_request)
+        await client.close()
+        return search_request
+
+    domestic = asyncio.run(run_route("LAX", "US"))
+    international = asyncio.run(run_route("LHR", "GB"))
+    assert domestic.nearby_airports is True
+    assert international.nearby_airports is False

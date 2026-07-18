@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import Settings
-from .airports import local_airport, smart_baggage
+from .airports import is_domestic, local_airport, smart_baggage
 from .models import FlightOption, Leg, SearchRequest
 
 
@@ -208,9 +208,16 @@ class RouteStackClient:
     async def search(
         self, request: SearchRequest
     ) -> tuple[list[FlightOption], str, str]:
+        use_alternatives_immediately = (
+            request.nearby_airports and not request.auto_nearby
+        )
         origin_result, destination_result = await asyncio.gather(
-            self.resolve_location(request.origin, request.nearby_airports),
-            self.resolve_location(request.destination, request.nearby_airports),
+            self.resolve_location(
+                request.origin, use_alternatives_immediately
+            ),
+            self.resolve_location(
+                request.destination, use_alternatives_immediately
+            ),
         )
         origin_code, origin_label, nearby_origins, origin_country = origin_result
         (
@@ -228,6 +235,32 @@ class RouteStackClient:
                 origin_country,
                 destination_country,
             )
+
+        if request.auto_nearby:
+            request.nearby_airports = is_domestic(
+                origin_country, destination_country
+            )
+            if (
+                request.nearby_airports
+                and not nearby_origins
+                and not nearby_destinations
+            ):
+                origin_result, destination_result = await asyncio.gather(
+                    self.resolve_location(request.origin, True),
+                    self.resolve_location(request.destination, True),
+                )
+                (
+                    origin_code,
+                    origin_label,
+                    nearby_origins,
+                    origin_country,
+                ) = origin_result
+                (
+                    destination_code,
+                    destination_label,
+                    nearby_destinations,
+                    destination_country,
+                ) = destination_result
 
         shifts = range(-3, 4) if request.flexible_dates else (0,)
         searches = []

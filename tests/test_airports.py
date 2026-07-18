@@ -1,6 +1,6 @@
 import asyncio
 
-from flight_bot.airports import local_airport, smart_baggage
+from flight_bot.airports import is_domestic, local_airport, smart_baggage
 from flight_bot.config import Settings
 from flight_bot.routestack import RouteStackClient
 
@@ -20,6 +20,8 @@ def test_local_airports_detect_domestic_and_international_baggage() -> None:
     assert jfk and lax and lhr
     assert smart_baggage(jfk[2], lax[2]) == (0, 1)
     assert smart_baggage(jfk[2], lhr[2]) == (2, 1)
+    assert is_domestic(jfk[2], lax[2]) is True
+    assert is_domestic(jfk[2], lhr[2]) is False
 
 
 def test_exact_iata_resolution_does_not_call_provider() -> None:

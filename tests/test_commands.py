@@ -190,6 +190,15 @@ def test_access_gate_allows_owner_and_myid_without_provider_access() -> None:
     )
     assert asyncio.run(access_gate(owner_update, context)) is None
 
+    unlocked_settings = Settings(
+        telegram_bot_token="123456:test",
+        routestack_api_key="public",
+        routestack_api_secret="secret",
+        owner_telegram_user_id=None,
+    )
+    unlocked_context = SimpleNamespace(
+        application=SimpleNamespace(bot_data={"settings": unlocked_settings})
+    )
     message = SimpleNamespace(text="/myid", reply_text=AsyncMock())
     id_update = SimpleNamespace(
         effective_user=SimpleNamespace(id=999),
@@ -197,5 +206,15 @@ def test_access_gate_allows_owner_and_myid_without_provider_access() -> None:
         callback_query=None,
     )
     with pytest.raises(ApplicationHandlerStop):
-        asyncio.run(access_gate(id_update, context))
+        asyncio.run(access_gate(id_update, unlocked_context))
     assert "999" in message.reply_text.await_args.args[0]
+
+    locked_message = SimpleNamespace(text="/myid", reply_text=AsyncMock())
+    locked_update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=999),
+        effective_message=locked_message,
+        callback_query=None,
+    )
+    with pytest.raises(ApplicationHandlerStop):
+        asyncio.run(access_gate(locked_update, context))
+    locked_message.reply_text.assert_awaited_once_with("This is a private bot.")

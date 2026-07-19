@@ -79,8 +79,9 @@ WATCH_DIGEST_HOUR_UTC=13
 
 `OWNER_TELEGRAM_USER_ID` is the only account allowed to use the bot. If it is
 unset, every command is locked except `/myid`. Send `/myid`, copy the numeric
-value into Railway, and redeploy. Unauthorized users are stopped before search,
-checkout, or watch handlers and therefore cannot consume RouteStack tokens.
+value into Railway, and redeploy. After configuration, `/myid` also responds
+only to the owner. Unauthorized users are stopped before search, checkout, or
+watch handlers and therefore cannot consume RouteStack tokens.
 
 For persistent watches, add a Railway PostgreSQL service and expose its
 `DATABASE_URL` to the bot service. Without it, normal owner searches work but

@@ -158,7 +158,13 @@ async def access_gate(
     user = update.effective_user
     message = update.effective_message
     text = (message.text or "").strip().lower() if message else ""
-    if text.startswith("/myid"):
+    if text.startswith("/myid") and (
+        settings.owner_telegram_user_id is None
+        or (
+            user is not None
+            and user.id == settings.owner_telegram_user_id
+        )
+    ):
         if message and user:
             await message.reply_text(
                 f"Your Telegram user ID is: {user.id}\n"

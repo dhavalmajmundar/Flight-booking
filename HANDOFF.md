@@ -55,7 +55,8 @@ Last updated: 2026-07-19
 - A group `-1` update gate runs before every message and callback handler.
 - Unauthorized updates terminate before any RouteStack-capable code.
 - When no owner ID is configured, only `/myid` works; all searches are locked.
-- `/myid` never calls RouteStack and is used to obtain the ID for Railway.
+- `/myid` never calls RouteStack and is used to obtain the ID for Railway. Once
+  the owner is configured, it responds only to that owner.
 - Only one Railway bot instance should run to preserve the strict global watch
   cap and Telegram long-polling ownership.
 

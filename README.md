@@ -13,6 +13,8 @@ The bot does **not** search in the background and does **not** invent prices.
 - `/defaults` helper describing the smart settings without making a fare call
 - Owner-only access gate that stops unauthorized messages and callbacks before
   any RouteStack-capable handler
+- Credential-redacting log formatter and suppressed HTTP request logging so
+  Telegram, RouteStack, and database secrets do not appear in deployment logs
 - Persistent Railway Postgres price watches with target, percentage-drop, and
   new-record-low alerts
 - Daily watch-token cap, automatic pausing, price history, daily digests, weekly

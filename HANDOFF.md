@@ -11,7 +11,7 @@ Last updated: 2026-07-19
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 28 automated tests passing
+- Verification: 29 automated tests passing
 
 ## User experience
 
@@ -59,6 +59,9 @@ Last updated: 2026-07-19
   the owner is configured, it responds only to that owner.
 - Only one Railway bot instance should run to preserve the strict global watch
   cap and Telegram long-polling ownership.
+- Application logging redacts the Telegram token, RouteStack credentials, and
+  database URL. HTTPX/HTTPCore request logging stays at WARNING because Telegram
+  embeds the bot token in Bot API request URLs.
 
 ## Persistent price watches
 

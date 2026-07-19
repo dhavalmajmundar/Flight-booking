@@ -15,6 +15,12 @@ class Settings:
     default_currency: str = "USD"
     max_results: int = 40
     search_cache_seconds: int = 300
+    owner_telegram_user_id: int | None = None
+    database_url: str | None = None
+    watch_daily_token_cap: int = 10
+    watch_max_active: int = 5
+    watch_max_days: int = 60
+    watch_digest_hour_utc: int = 13
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -32,6 +38,14 @@ class Settings:
                 "Missing required environment variables: " + ", ".join(missing)
             )
 
+        owner_value = os.getenv("OWNER_TELEGRAM_USER_ID", "").strip()
+        try:
+            owner_id = int(owner_value) if owner_value else None
+        except ValueError as exc:
+            raise RuntimeError(
+                "OWNER_TELEGRAM_USER_ID must be a numeric Telegram user ID."
+            ) from exc
+
         return cls(
             telegram_bot_token=required["TELEGRAM_BOT_TOKEN"],
             routestack_api_key=required["ROUTESTACK_API_KEY"],
@@ -43,5 +57,19 @@ class Settings:
             max_results=max(5, min(int(os.getenv("MAX_RESULTS", "40")), 100)),
             search_cache_seconds=max(
                 0, min(int(os.getenv("SEARCH_CACHE_SECONDS", "300")), 900)
+            ),
+            owner_telegram_user_id=owner_id,
+            database_url=os.getenv("DATABASE_URL", "").strip() or None,
+            watch_daily_token_cap=max(
+                1, min(int(os.getenv("WATCH_DAILY_TOKEN_CAP", "10")), 100)
+            ),
+            watch_max_active=max(
+                1, min(int(os.getenv("WATCH_MAX_ACTIVE", "5")), 20)
+            ),
+            watch_max_days=max(
+                1, min(int(os.getenv("WATCH_MAX_DAYS", "60")), 365)
+            ),
+            watch_digest_hour_utc=max(
+                0, min(int(os.getenv("WATCH_DIGEST_HOUR_UTC", "13")), 23)
             ),
         )

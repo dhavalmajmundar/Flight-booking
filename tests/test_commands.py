@@ -4,17 +4,20 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram.ext import ApplicationHandlerStop
 
 from flight_bot.bot import (
     BAGS,
     BOT_COMMANDS,
     _nearby_search_allowance,
+    access_gate,
     configure_bot_commands,
     flexible,
     parse_flight_command,
     suggested_departure_date,
 )
 from flight_bot.models import Cabin, Priority
+from flight_bot.config import Settings
 
 
 def future_date(days: int = 30) -> str:
@@ -136,7 +139,63 @@ def test_startup_registers_telegram_slash_menu() -> None:
         "start",
         "search",
         "flight",
+        "watch",
+        "watches",
+        "history",
+        "checknow",
+        "usage",
+        "unwatch",
         "defaults",
         "help",
         "cancel",
+        "myid",
     ]
+
+
+def test_access_gate_blocks_non_owner_before_other_handlers() -> None:
+    message = SimpleNamespace(text="/search", reply_text=AsyncMock())
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=999),
+        effective_message=message,
+        callback_query=None,
+    )
+    settings = Settings(
+        telegram_bot_token="123456:test",
+        routestack_api_key="public",
+        routestack_api_secret="secret",
+        owner_telegram_user_id=123,
+    )
+    context = SimpleNamespace(
+        application=SimpleNamespace(bot_data={"settings": settings})
+    )
+    with pytest.raises(ApplicationHandlerStop):
+        asyncio.run(access_gate(update, context))
+    message.reply_text.assert_awaited_once_with("This is a private bot.")
+
+
+def test_access_gate_allows_owner_and_myid_without_provider_access() -> None:
+    settings = Settings(
+        telegram_bot_token="123456:test",
+        routestack_api_key="public",
+        routestack_api_secret="secret",
+        owner_telegram_user_id=123,
+    )
+    context = SimpleNamespace(
+        application=SimpleNamespace(bot_data={"settings": settings})
+    )
+    owner_update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=123),
+        effective_message=SimpleNamespace(text="/search"),
+        callback_query=None,
+    )
+    assert asyncio.run(access_gate(owner_update, context)) is None
+
+    message = SimpleNamespace(text="/myid", reply_text=AsyncMock())
+    id_update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=999),
+        effective_message=message,
+        callback_query=None,
+    )
+    with pytest.raises(ApplicationHandlerStop):
+        asyncio.run(access_gate(id_update, context))
+    assert "999" in message.reply_text.await_args.args[0]

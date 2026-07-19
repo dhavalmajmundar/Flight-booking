@@ -17,11 +17,13 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -32,6 +34,18 @@ from .links import expedia_search_url
 from .models import Cabin, FlightOption, Priority, SearchRequest
 from .ranking import rank_flights
 from .routestack import FlightSearchError, RouteStackClient
+from .watch_store import WatchStore
+from .watching import (
+    WATCH_CONFIRM,
+    activate_watch,
+    checknow_command,
+    history_command,
+    run_watch_cycle,
+    unwatch_command,
+    usage_command,
+    watch_command,
+    watches_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +74,8 @@ def _keyboard(*rows: tuple[str, ...]) -> ReplyKeyboardMarkup:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "I search and compare live flights only when you request one.\n\n"
-        "Use /search to start, /cancel to stop, or /help for details."
+        "Use /search for a guided search, /flight for one line, /watch for a "
+        "private price alert, or /help for details."
     )
 
 
@@ -70,6 +85,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "dates, passengers, cabin, baggage, airline preferences, budget, and "
         "priority. No provider search happens until you confirm.\n\n"
         "Use /defaults to review the smart settings without making a search.\n\n"
+        "Price-watch commands:\n"
+        "/watch JFK LAX 2026-09-15 --return 2026-09-22 --target 350 "
+        "--drop 5 --every 24 --for-days 30\n"
+        "/watches — list alerts\n"
+        "/history WATCH_ID — observed prices and guidance\n"
+        "/checknow WATCH_ID — queue one token-capped check\n"
+        "/unwatch WATCH_ID — stop an alert\n"
+        "/usage — today's watch-token usage\n\n"
         "For a one-line request:\n"
         "/flight JFK LAX 2026-09-15\n\n"
         "Smart defaults: round trip returning after 7 nights, 1 adult, economy, "
@@ -105,9 +128,16 @@ BOT_COMMANDS = (
     BotCommand("start", "Open the flight assistant"),
     BotCommand("search", "Start a guided flight search"),
     BotCommand("flight", "Search in one line: JFK LAX 2026-09-15"),
+    BotCommand("watch", "Create a recurring price alert"),
+    BotCommand("watches", "List active price watches"),
+    BotCommand("history", "Show observed watch prices"),
+    BotCommand("checknow", "Queue one watch check"),
+    BotCommand("usage", "Show today's watch token usage"),
+    BotCommand("unwatch", "Stop a price watch"),
     BotCommand("defaults", "Show smart search defaults"),
     BotCommand("help", "Show commands and one-line options"),
     BotCommand("cancel", "Cancel the current search"),
+    BotCommand("myid", "Show your Telegram user ID"),
 )
 
 
@@ -118,6 +148,70 @@ async def configure_bot_commands(application: Application) -> None:
     except TelegramError as exc:
         # A temporary Telegram failure should not stop polling or flight search.
         logger.warning("Could not register Telegram command menu: %s", exc)
+
+
+async def access_gate(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Stop unauthorized updates before they can reach any provider handler."""
+    settings: Settings = context.application.bot_data["settings"]
+    user = update.effective_user
+    message = update.effective_message
+    text = (message.text or "").strip().lower() if message else ""
+    if text.startswith("/myid"):
+        if message and user:
+            await message.reply_text(
+                f"Your Telegram user ID is: {user.id}\n"
+                "Set Railway OWNER_TELEGRAM_USER_ID to this number."
+            )
+        raise ApplicationHandlerStop
+
+    authorized = bool(
+        user
+        and settings.owner_telegram_user_id is not None
+        and user.id == settings.owner_telegram_user_id
+    )
+    if authorized:
+        return
+
+    if update.callback_query:
+        await update.callback_query.answer(
+            "This private bot is restricted to its owner.", show_alert=True
+        )
+    elif message:
+        if settings.owner_telegram_user_id is None:
+            await message.reply_text(
+                "This private bot is locked until its owner is configured. "
+                "Send /myid to obtain your Telegram ID."
+            )
+        else:
+            await message.reply_text("This is a private bot.")
+    logger.warning("Blocked an unauthorized Telegram update")
+    raise ApplicationHandlerStop
+
+
+async def on_startup(application: Application) -> None:
+    await configure_bot_commands(application)
+    store: WatchStore | None = application.bot_data.get("watch_store")
+    if not store:
+        logger.warning(
+            "DATABASE_URL is not configured; persistent price watches are disabled."
+        )
+        return
+    try:
+        await store.initialize()
+    except Exception:
+        logger.exception("Could not initialize the watch database; watches disabled")
+        application.bot_data.pop("watch_store", None)
+        return
+    if application.job_queue:
+        application.job_queue.run_repeating(
+            run_watch_cycle,
+            interval=300,
+            first=15,
+            name="flight-price-watch-cycle",
+        )
+        logger.info("Persistent flight price watcher scheduled")
 
 
 async def begin_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -843,6 +937,7 @@ async def checkout_callback(
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("trip", None)
+    context.user_data.pop("pending_watch", None)
     await update.message.reply_text(
         "Search cancelled. No flight search was made.",
         reply_markup=ReplyKeyboardRemove(),
@@ -858,18 +953,23 @@ async def on_shutdown(application: Application) -> None:
     client: RouteStackClient | None = application.bot_data.get("routestack")
     if client:
         await client.close()
+    store: WatchStore | None = application.bot_data.get("watch_store")
+    if store:
+        await store.close()
 
 
 def build_application(settings: Settings) -> Application:
     application = (
         Application.builder()
         .token(settings.telegram_bot_token)
-        .post_init(configure_bot_commands)
+        .post_init(on_startup)
         .post_shutdown(on_shutdown)
         .build()
     )
     application.bot_data["settings"] = settings
     application.bot_data["routestack"] = RouteStackClient(settings)
+    if settings.database_url:
+        application.bot_data["watch_store"] = WatchStore(settings.database_url)
 
     conversation = ConversationHandler(
         entry_points=[
@@ -899,9 +999,28 @@ def build_application(settings: Settings) -> Application:
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
     )
+    watch_conversation = ConversationHandler(
+        entry_points=[CommandHandler("watch", watch_command)],
+        states={
+            WATCH_CONFIRM: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, activate_watch
+                )
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,
+    )
+    application.add_handler(TypeHandler(Update, access_gate), group=-1)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("defaults", defaults_command))
+    application.add_handler(CommandHandler("watches", watches_command))
+    application.add_handler(CommandHandler("history", history_command))
+    application.add_handler(CommandHandler("checknow", checknow_command))
+    application.add_handler(CommandHandler("usage", usage_command))
+    application.add_handler(CommandHandler("unwatch", unwatch_command))
+    application.add_handler(watch_conversation)
     application.add_handler(conversation)
     application.add_handler(
         CallbackQueryHandler(

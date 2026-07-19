@@ -11,6 +11,12 @@ The bot does **not** search in the background and does **not** invent prices.
 - Guided `/search` conversation
 - Telegram slash-command menu registered automatically at startup
 - `/defaults` helper describing the smart settings without making a fare call
+- Owner-only access gate that stops unauthorized messages and callbacks before
+  any RouteStack-capable handler
+- Persistent Railway Postgres price watches with target, percentage-drop, and
+  new-record-low alerts
+- Daily watch-token cap, automatic pausing, price history, daily digests, weekly
+  summaries, expiry reminders, and observed-history book/wait guidance
 - One-line `/flight` command with optional filters
 - Smart `/flight` defaults: 7-night round trip, one adult, economy, flexible
   dates, nearby airports for domestic routes only, and route-aware baggage
@@ -63,7 +69,22 @@ ROUTESTACK_BASE_URL=https://mcp.routestack.ai
 DEFAULT_CURRENCY=USD
 MAX_RESULTS=40
 SEARCH_CACHE_SECONDS=300
+OWNER_TELEGRAM_USER_ID=123456789
+DATABASE_URL=postgresql://...
+WATCH_DAILY_TOKEN_CAP=10
+WATCH_MAX_ACTIVE=5
+WATCH_MAX_DAYS=60
+WATCH_DIGEST_HOUR_UTC=13
 ```
+
+`OWNER_TELEGRAM_USER_ID` is the only account allowed to use the bot. If it is
+unset, every command is locked except `/myid`. Send `/myid`, copy the numeric
+value into Railway, and redeploy. Unauthorized users are stopped before search,
+checkout, or watch handlers and therefore cannot consume RouteStack tokens.
+
+For persistent watches, add a Railway PostgreSQL service and expose its
+`DATABASE_URL` to the bot service. Without it, normal owner searches work but
+watch commands remain disabled.
 
 Run:
 
@@ -73,6 +94,43 @@ python -m flight_bot.main
 
 Then open the bot in Telegram and send `/start` or `/search`.
 Typing `/` shows the registered command menu after the deployment has restarted.
+
+## Price watches
+
+Create a safe-default watch:
+
+```text
+/watch JFK LAX 2026-09-15 --return 2026-09-22 --target 350
+```
+
+Full example:
+
+```text
+/watch JFK LAX 2026-09-15 --return 2026-09-22 --target 350 --drop 5 --every 24 --for-days 30 --cabin economy --prefer DL,UA
+```
+
+Watch commands:
+
+- `/watches` lists active watches.
+- `/history WATCH_ID` shows up to 60 days of observed history and guidance.
+- `/checknow WATCH_ID` queues one additional token-capped check.
+- `/unwatch WATCH_ID` stops a watch.
+- `/usage` shows today's watch-token attempts and the configured cap.
+
+Safe defaults are one exact route/date search every 24 hours, a 5% meaningful
+drop threshold, at most five active watches, and at most 60 days. Flexible dates
+and nearby airports are disabled for recurring checks, so each check attempts no
+more than one RouteStack search token. The confirmation shows the maximum
+lifetime usage before activation. The global daily cap defaults to 10; remaining
+checks pause until the next UTC day when it is reached.
+
+The first successful check sends a baseline. Later alerts are sent for a target
+price, a configured percentage reduction, or a new record low, without repeating
+the same alert price. Each observation is stored in Postgres. Daily digests,
+Monday weekly summaries, and 48-hour expiry reminders are automatic. “Book now”
+or “wait” language uses only that watch's recorded history; it is not a market
+forecast. Alerts include an exact RouteStack revalidation button and an Expedia
+comparison link.
 
 For a minimal one-line search:
 
@@ -168,6 +226,9 @@ docker run --env-file .env --restart unless-stopped flight-bot
 - RouteStack prices one completed search as one token. Combining flexible dates
   and nearby airports can therefore use up to 11 tokens for one Telegram request;
   the confirmation screen shows this maximum before searching.
+- Watch usage is counted conservatively as attempted searches before the provider
+  response. RouteStack describes its production model as one successful search
+  per token; the conservative local count prevents accidental overspending.
 - The total shown is RouteStack's first available display/total fare field.
 - Checked-bag metadata is provider-reported and sometimes absent.
 - Cancellation, changes, seat selection, payment-card fees, and exact baggage

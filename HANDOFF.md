@@ -1,6 +1,6 @@
 # Flight Bot Handoff
 
-Last updated: 2026-07-18
+Last updated: 2026-07-19
 
 ## Current status
 
@@ -11,13 +11,16 @@ Last updated: 2026-07-18
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 22 automated tests passing
+- Verification: 28 automated tests passing
 
 ## User experience
 
 - `/search` starts the guided search.
 - `/flight ORIGIN DESTINATION YYYY-MM-DD` starts a one-line search.
 - `/defaults` explains the smart defaults without using RouteStack.
+- `/watch` creates a persistent price alert after showing estimated maximum
+  lifetime usage and requiring confirmation.
+- `/watches`, `/history`, `/checknow`, `/unwatch`, and `/usage` manage watches.
 - The bot registers `/start`, `/search`, `/flight`, `/defaults`, `/help`, and
   `/cancel` with Telegram during startup so typing `/` displays a command menu.
 - One-line defaults:
@@ -46,6 +49,32 @@ Last updated: 2026-07-18
   separate comparison whose itinerary and price may differ.
 - Telegram never collects payment details or issues tickets.
 
+## Security and ownership
+
+- `OWNER_TELEGRAM_USER_ID` is the only account permitted to use the bot.
+- A group `-1` update gate runs before every message and callback handler.
+- Unauthorized updates terminate before any RouteStack-capable code.
+- When no owner ID is configured, only `/myid` works; all searches are locked.
+- `/myid` never calls RouteStack and is used to obtain the ID for Railway.
+- Only one Railway bot instance should run to preserve the strict global watch
+  cap and Telegram long-polling ownership.
+
+## Persistent price watches
+
+- Railway PostgreSQL is required through `DATABASE_URL`.
+- Watches default to one exact route/date search every 24 hours.
+- Flexible dates and nearby airports are disabled for recurring checks.
+- Defaults: 5% drop alert, five active watches, 60-day maximum, and ten attempted
+  watch searches per UTC day globally.
+- The first result establishes a baseline. Alerts trigger on target price,
+  meaningful drop, or a non-duplicated record low.
+- Postgres stores observed price, airline, duration, stops, and timestamps.
+- Automated output includes daily digests, Monday weekly summaries, 48-hour
+  expiry reminders, and guidance based only on observed watch history.
+- At the daily cap, due checks move to the next UTC day and the owner is notified.
+- RouteStack revalidation remains click-only; scheduled jobs never generate
+  checkout links or collect payment details.
+
 ## API-usage safeguards
 
 - Exact IATA airport codes are resolved from the local `airportsdata` package.
@@ -66,6 +95,8 @@ Last updated: 2026-07-18
 - `flight_bot/links.py`: documented external comparison deeplinks
 - `flight_bot/airports.py`: local airport and country helpers
 - `flight_bot/config.py`: environment configuration
+- `flight_bot/watch_store.py`: PostgreSQL schema and persistent watch operations
+- `flight_bot/watching.py`: watch commands, scheduler, alerts, digests, and caps
 - `tests/`: automated regression tests
 
 ## Required environment variables
@@ -73,8 +104,10 @@ Last updated: 2026-07-18
 - `TELEGRAM_BOT_TOKEN`
 - `ROUTESTACK_API_KEY`
 - `ROUTESTACK_API_SECRET`
+- `OWNER_TELEGRAM_USER_ID` (required to unlock bot use)
 
-Optional variables are documented in `.env.example`. Never commit `.env`,
+`DATABASE_URL` is required for watches. Other optional watch limits are documented
+in `.env.example`. Never commit `.env`,
 Telegram credentials, RouteStack secrets, fare identifiers, or checkout URLs.
 
 ## Verification and deployment

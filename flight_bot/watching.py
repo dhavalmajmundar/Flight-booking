@@ -13,9 +13,9 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from .config import Settings
 from .command_input import command_arguments
-from .links import expedia_search_url
+from .links import expedia_search_url, google_flights_url, kayak_search_url
 from .models import Cabin, FlightOption, Priority, SearchRequest
-from .ranking import rank_flights
+from .ranking import itinerary_risks, observed_deal_label, rank_flights
 from .routestack import FlightSearchError, RouteStackClient
 from .watch_store import Watch, WatchStore
 
@@ -161,7 +161,10 @@ def parse_watch_command(
         raise ValueError("the departure is too soon to create a watch")
     maximum_checks = max(
         1,
-        math.ceil((expires_at - now).total_seconds() / (interval_hours * 3600)),
+        math.ceil(
+            (expires_at - now).total_seconds()
+            / (min(interval_hours, 6) * 3600)
+        ),
     )
     request = SearchRequest(
         origin=args[0].strip().replace("_", " "),
@@ -205,6 +208,47 @@ def observed_price_guidance(prices: list[float]) -> str:
     if len(prices) >= 3 and prices[-1] > prices[-2] > prices[-3]:
         return "Consider booking: the last three observed prices increased."
     return "Wait/watch: the current price is above this watch's observed low."
+
+
+def adaptive_watch_interval_hours(
+    watch: Watch, now: datetime | None = None
+) -> int:
+    """Use scarce watch calls more often only as urgency increases."""
+    now = now or datetime.now(timezone.utc)
+    days_until_departure = (watch.request.departure_date - now.date()).days
+    interval = watch.interval_hours
+    if days_until_departure > 90:
+        interval = max(interval, 48)
+    elif days_until_departure > 30:
+        interval = max(interval, 24)
+    elif days_until_departure <= 3:
+        interval = min(interval, 6)
+    elif days_until_departure <= 14:
+        interval = min(interval, 12)
+    if (
+        watch.target_price is not None
+        and watch.last_price is not None
+        and watch.last_price <= watch.target_price * 1.05
+    ):
+        interval = min(interval, 12)
+    return min((6, 12, 24, 48), key=lambda value: abs(value - interval))
+
+
+def watch_urgency_key(
+    watch: Watch, now: datetime | None = None
+) -> tuple[float, int, datetime]:
+    now = now or datetime.now(timezone.utc)
+    days = max(0, (watch.request.departure_date - now.date()).days)
+    target_component = 2.5
+    if (
+        watch.target_price is not None
+        and watch.last_price is not None
+        and watch.target_price > 0
+    ):
+        target_gap = abs(watch.last_price - watch.target_price) / watch.target_price
+        target_component = min(target_gap * 10, 5)
+    urgency_score = min(days / 30, 5) + target_component
+    return urgency_score, days, watch.next_check_at
 
 
 def _store(application) -> WatchStore | None:
@@ -254,7 +298,9 @@ async def watch_command(
         f"{pending.expires_at:%Y-%m-%d}\n\n"
         "Each check searches one exact route/date with flexible dates and nearby "
         "airports off. It uses at most 1 RouteStack token. Estimated maximum: "
-        f"{pending.maximum_checks} token(s). Daily global cap applies.\n\n"
+        f"{pending.maximum_checks} token(s). Daily global cap applies. The scheduler "
+        "automatically checks less often far from departure and prioritizes trips "
+        "near departure or near their target price.\n\n"
         "Send Activate watch or Cancel.",
     )
     return WATCH_CONFIRM
@@ -459,6 +505,16 @@ def _watch_buttons(application, user_id: int, option: FlightOption, request: Sea
                 InlineKeyboardButton(
                     "Compare on Expedia",
                     url=expedia_search_url(option, request),
+                ),
+                InlineKeyboardButton(
+                    "Google Flights",
+                    url=google_flights_url(option, request),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "Compare on Kayak",
+                    url=kayak_search_url(option, request),
                 )
             ],
         ]
@@ -480,6 +536,15 @@ async def _send_watch_alert(
     guidance = observed_price_guidance(
         [price for _, price in history] + [option.total_price]
     )
+    deal_level = observed_deal_label(
+        option.total_price, [price for _, price in history]
+    )
+    risks = itinerary_risks(option)
+    risk_text = (
+        "\n🚨 Important itinerary warning: " + "; ".join(risks)
+        if risks
+        else ""
+    )
     await application.bot.send_message(
         chat_id=watch.user_id,
         text=(
@@ -493,7 +558,8 @@ async def _send_watch_alert(
             f"{option.duration_minutes // 60}h "
             f"{option.duration_minutes % 60:02d}m | "
             f"{'nonstop' if option.stops == 0 else f'{option.stops} stop(s)'}\n"
-            f"{guidance}\n\n"
+            f"Observed deal level: {deal_level}\n"
+            f"{guidance}{risk_text}\n\n"
             "Prices can change. The exact link revalidates before checkout."
         ),
         reply_markup=_watch_buttons(
@@ -502,8 +568,11 @@ async def _send_watch_alert(
     )
 
 
-async def _check_watch(application, store: WatchStore, watch: Watch) -> None:
-    if not await store.claim(watch):
+async def _check_watch(
+    application, store: WatchStore, watch: Watch
+) -> None:
+    interval = adaptive_watch_interval_hours(watch)
+    if not await store.claim(watch, interval):
         return
     await store.increment_usage()
     client: RouteStackClient = application.bot_data["routestack"]
@@ -515,7 +584,39 @@ async def _check_watch(application, store: WatchStore, watch: Watch) -> None:
             return
         option = results.cheapest
         history = await store.recent_prices(watch.id, days=60)
+        previous_observation = await store.latest_observation(watch.id)
         reasons = _alert_reasons(watch, option.total_price)
+        if (
+            previous_observation
+            and previous_observation[2] is not None
+            and previous_observation[2] > 0
+            and option.stops == 0
+        ):
+            if (
+                watch.target_price is not None
+                and option.total_price <= watch.target_price
+            ):
+                reasons.append("nonstop option is now affordable")
+            elif watch.target_price is None:
+                reasons.append("nonstop option is now the cheapest observed itinerary")
+        if previous_observation and reasons:
+            _, previous_duration, previous_stops = previous_observation
+            if (
+                previous_stops is not None
+                and option.stops > previous_stops
+            ):
+                reasons.append(
+                    f"tradeoff: now has {option.stops} stop(s), previously "
+                    f"{previous_stops}"
+                )
+            if (
+                previous_duration is not None
+                and option.duration_minutes > previous_duration + 120
+            ):
+                reasons.append(
+                    "tradeoff: itinerary is over 2 hours longer than the "
+                    "previous observed option"
+                )
         alert_sent = False
         if reasons:
             try:
@@ -622,7 +723,8 @@ async def run_watch_cycle(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not store or settings.owner_telegram_user_id is None:
         return
     await store.expire_old()
-    due = await store.due_watches(limit=settings.watch_daily_token_cap)
+    due = await store.due_watches(limit=max(settings.watch_daily_token_cap, 25))
+    due.sort(key=watch_urgency_key)
     for watch in due:
         if await store.usage_today() >= settings.watch_daily_token_cap:
             await store.postpone_due_until_tomorrow()

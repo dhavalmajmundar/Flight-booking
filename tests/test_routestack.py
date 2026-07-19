@@ -58,6 +58,35 @@ def test_parse_one_way_offer() -> None:
     assert option.booking_payload == raw
 
 
+def test_parse_offer_detects_airport_change_overnight_and_self_transfer() -> None:
+    raw = {
+        "fareSourceCode": "fare-risky",
+        "showOurprice": 150,
+        "selfTransfer": True,
+        "flights": [
+            {
+                "departure": "JFK",
+                "arrival": "LGA",
+                "departureTime": "2026-09-15T20:00:00",
+                "arrivalTime": "2026-09-15T22:00:00",
+            },
+            {
+                "departure": "EWR",
+                "arrival": "LAX",
+                "departureTime": "2026-09-16T08:00:00",
+                "arrivalTime": "2026-09-16T11:00:00",
+            },
+        ],
+    }
+    option = RouteStackClient._parse_offer(
+        raw, "USD", 0, "JFK", "LAX", False
+    )
+    assert option is not None
+    assert option.self_transfer is True
+    assert option.legs[0].airport_changes == (("LGA", "EWR", 600),)
+    assert option.legs[0].overnight_layovers == ("LGA",)
+
+
 def test_parse_round_trip_offer() -> None:
     raw = {
         "id": "roundtrip",

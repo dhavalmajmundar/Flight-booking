@@ -3,7 +3,7 @@ from __future__ import annotations
 from html import escape
 
 from .models import FlightOption, SearchRequest
-from .ranking import RankedResults
+from .ranking import RankedResults, observed_deal_label
 
 
 def minutes_text(minutes: int) -> str:
@@ -95,6 +95,8 @@ def format_results(
     request: SearchRequest,
     origin_label: str,
     destination_label: str,
+    observed_prices: list[float] | None = None,
+    search_note: str | None = None,
 ) -> str:
     labels: dict[tuple[str, float], list[str]] = {}
     for label, option in (
@@ -114,6 +116,8 @@ def format_results(
         f"Prices are total for {request.adults} adult(s), including provider-reported taxes/fees.",
         "",
     ]
+    if search_note:
+        lines.extend([f"🔎 <b>Search strategy:</b> {escape(search_note)}", ""])
     lines.extend(_flexible_date_lines(results, request))
     for rank, option in enumerate(selected, 1):
         tags = " · ".join(labels.get(_option_key(option), []))
@@ -159,8 +163,22 @@ def format_results(
                 f"<b>Why:</b> {_reason(option, results)}",
             ]
         )
+        if observed_prices is not None:
+            lines.append(
+                f"<b>Observed deal level:</b> "
+                f"{escape(observed_deal_label(option.total_price, observed_prices))}"
+            )
         if option.warnings:
-            lines.append(f"⚠️ {escape('; '.join(dict.fromkeys(option.warnings)))}")
+            warnings = list(dict.fromkeys(option.warnings))
+            major = [item for item in warnings if item.startswith("HIGH RISK:")]
+            other = [item for item in warnings if item not in major]
+            if major:
+                lines.append(
+                    "🚨 <b>Important itinerary warning:</b> "
+                    f"{escape('; '.join(major))}"
+                )
+            if other:
+                lines.append(f"⚠️ {escape('; '.join(other))}")
         lines.append("")
 
     lines.extend(

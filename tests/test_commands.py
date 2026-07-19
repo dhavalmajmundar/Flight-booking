@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -10,13 +10,14 @@ from flight_bot.bot import (
     BAGS,
     BOT_COMMANDS,
     _nearby_search_allowance,
+    _progressive_search,
     access_gate,
     configure_bot_commands,
     flexible,
     parse_flight_command,
     suggested_departure_date,
 )
-from flight_bot.models import Cabin, Priority
+from flight_bot.models import Cabin, FlightOption, Leg, Priority, SearchRequest
 from flight_bot.config import Settings
 
 
@@ -145,6 +146,10 @@ def test_startup_registers_telegram_slash_menu() -> None:
         "checknow",
         "usage",
         "unwatch",
+        "airports",
+        "recent",
+        "repeat",
+        "profile",
         "defaults",
         "help",
         "cancel",
@@ -218,3 +223,46 @@ def test_access_gate_allows_owner_and_myid_without_provider_access() -> None:
     with pytest.raises(ApplicationHandlerStop):
         asyncio.run(access_gate(locked_update, context))
     locked_message.reply_text.assert_awaited_once_with("This is a private bot.")
+
+
+def test_progressive_search_stops_after_safe_first_stage() -> None:
+    departure = date.today() + timedelta(days=45)
+    request = SearchRequest(
+        origin="JFK",
+        destination="LAX",
+        departure_date=departure,
+        return_date=departure + timedelta(days=7),
+        adults=1,
+        cabin=Cabin.ECONOMY,
+        flexible_dates=True,
+        nearby_airports=False,
+        checked_bags=0,
+        auto_nearby=True,
+    )
+    option = FlightOption(
+        offer_id="safe",
+        airlines=("Test Air",),
+        airline_codes=("TA",),
+        legs=(
+            Leg(
+                origin="JFK",
+                destination="LAX",
+                departure=datetime.combine(departure, datetime.min.time()),
+                arrival=datetime.combine(departure, datetime.min.time())
+                + timedelta(hours=6),
+                duration_minutes=360,
+                stops=0,
+            ),
+        ),
+        total_price=300,
+        currency="USD",
+        checked_bags=0,
+        carry_on_bags=1,
+    )
+    client = SimpleNamespace(
+        search=AsyncMock(return_value=([option], "JFK", "LAX"))
+    )
+    result = asyncio.run(_progressive_search(client, request))
+    assert len(result[0]) == 1
+    assert "stopped after 1" in result[4]
+    assert client.search.await_count == 1

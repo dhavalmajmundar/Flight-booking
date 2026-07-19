@@ -23,6 +23,65 @@ def _normalize(value: float, low: float, high: float) -> float:
     return (value - low) / (high - low)
 
 
+def itinerary_risks(option: FlightOption) -> list[str]:
+    """Return material itinerary drawbacks without excluding the fare."""
+    risks: list[str] = []
+    if option.self_transfer:
+        risks.append("HIGH RISK: self-transfer or separate-ticket connection reported")
+    if option.stops >= 2:
+        risks.append("Multiple connections increase disruption risk")
+    for leg in option.legs:
+        if leg.airport_changes:
+            for arrival_airport, departure_airport, minutes in leg.airport_changes:
+                risks.append(
+                    "HIGH RISK: connection changes airports "
+                    f"{arrival_airport} → {departure_airport} in "
+                    f"{minutes // 60}h {minutes % 60:02d}m"
+                )
+        for airport in leg.overnight_layovers:
+            risks.append(f"Overnight connection at {airport}")
+        for airport, minutes in leg.layovers:
+            if minutes < 60:
+                risks.append(
+                    f"HIGH RISK: tight {minutes}-minute connection at {airport}"
+                )
+            elif minutes > 300:
+                risks.append(
+                    f"Long {minutes // 60}h {minutes % 60:02d}m layover at {airport}"
+                )
+        if leg.duration_minutes > 18 * 60:
+            risks.append(
+                f"Very long {leg.duration_minutes // 60}h "
+                f"{leg.duration_minutes % 60:02d}m travel leg"
+            )
+    return list(dict.fromkeys(risks))
+
+
+def has_major_itinerary_risk(option: FlightOption) -> bool:
+    return any(
+        warning.startswith("HIGH RISK:") for warning in itinerary_risks(option)
+    )
+
+
+def observed_deal_label(
+    price: float, observed_prices: list[float]
+) -> str:
+    """Classify a fare only against prices previously observed by this bot."""
+    history = [value for value in observed_prices if value > 0]
+    if len(history) < 3:
+        return f"Building route history ({len(history)} prior observation(s))"
+    ordered = sorted(history)
+    median = ordered[len(ordered) // 2]
+    record_low = ordered[0]
+    if price <= record_low * 1.02:
+        return "Excellent — at or near this bot’s observed low"
+    if price <= median * 0.95:
+        return "Good — at least 5% below this bot’s observed median"
+    if price <= median * 1.05:
+        return "Typical — near this bot’s observed median"
+    return "Expensive — above this bot’s observed range midpoint"
+
+
 def rank_flights(
     offers: list[FlightOption], request: SearchRequest
 ) -> RankedResults | None:
@@ -68,18 +127,29 @@ def rank_flights(
                 offer.warnings.append(
                     f"Only {offer.carry_on_bags} carry-on bag(s) shown as included"
                 )
-        if offer.stops >= 2:
-            offer.warnings.append("Multiple connections increase disruption risk")
+        risks = itinerary_risks(offer)
         for leg in offer.legs:
             for airport, minutes in leg.layovers:
-                if minutes < 50:
-                    offer.warnings.append(
-                        f"Tight {minutes}-minute connection at {airport}"
+                if (
+                    minutes > request.max_layover_minutes
+                    and not any(
+                        airport in warning and "layover" in warning.lower()
+                        for warning in risks
                     )
-                elif minutes > 240:
-                    offer.warnings.append(
-                        f"Long {minutes // 60}h {minutes % 60:02d}m layover at {airport}"
+                ):
+                    risks.append(
+                        f"Layover at {airport} exceeds your "
+                        f"{request.max_layover_minutes // 60}h "
+                        f"{request.max_layover_minutes % 60:02d}m preference"
                     )
+        offer.warnings.extend(risks)
+        for risk in risks:
+            if risk.startswith("HIGH RISK:"):
+                score += 0.75
+            elif risk.startswith(("Overnight", "Very long", "Multiple")):
+                score += 0.12
+            elif risk.startswith("Long"):
+                score += 0.07
         offer.score = score
 
     ordered = sorted(offers, key=lambda item: (item.score, item.total_price))

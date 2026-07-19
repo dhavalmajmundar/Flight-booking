@@ -47,3 +47,40 @@ def expedia_search_url(option: FlightOption, request: SearchRequest) -> str:
         f"{trip_type}/{departure_date.isoformat()}/{return_date.isoformat()}?"
         f"{urlencode(query)}"
     )
+
+
+def google_flights_url(option: FlightOption, request: SearchRequest) -> str:
+    """Open a Google Flights comparison query without calling an API."""
+    outbound = option.legs[0]
+    query = (
+        f"Flights from {outbound.origin} to {outbound.destination} "
+        f"on {outbound.departure.date().isoformat()}"
+    )
+    if request.return_date:
+        return_date = (
+            option.legs[1].departure.date()
+            if len(option.legs) > 1
+            else request.return_date
+        )
+        query += f" returning {return_date.isoformat()}"
+    query += f" for {request.adults} adult"
+    if request.adults != 1:
+        query += "s"
+    query += f" in {request.cabin.value.replace('_', ' ').lower()}"
+    return "https://www.google.com/travel/flights?" + urlencode({"q": query})
+
+
+def kayak_search_url(option: FlightOption, request: SearchRequest) -> str:
+    """Build a Kayak route/date comparison link without calling an API."""
+    outbound = option.legs[0]
+    dates = outbound.departure.date().isoformat()
+    if request.return_date:
+        returning = (
+            option.legs[1].departure.date()
+            if len(option.legs) > 1
+            else request.return_date
+        )
+        dates += f"/{returning.isoformat()}"
+    travelers = f"{request.adults}adult" + ("s" if request.adults != 1 else "")
+    route = f"{outbound.origin}-{outbound.destination}/{dates}/{travelers}"
+    return f"https://www.kayak.com/flights/{route}?sort=bestflight_a"

@@ -1,7 +1,11 @@
 from datetime import date, datetime
 
 from flight_bot.models import Cabin, FlightOption, Leg, Priority, SearchRequest
-from flight_bot.ranking import rank_flights
+from flight_bot.ranking import (
+    has_major_itinerary_risk,
+    observed_deal_label,
+    rank_flights,
+)
 
 
 def option(identifier: str, price: float, minutes: int, stops: int) -> FlightOption:
@@ -78,3 +82,21 @@ def test_cheapest_travel_date_uses_daily_lowest_fares() -> None:
         date(2026, 9, 14),
         date(2026, 9, 15),
     ]
+
+
+def test_unsafe_itinerary_is_kept_highlighted_and_penalized() -> None:
+    risky = option("risky", 100, 300, 1)
+    risky.self_transfer = True
+    safe = option("safe", 120, 310, 0)
+    result = rank_flights([risky, safe], request())
+    assert result is not None
+    assert risky in result.ordered
+    assert has_major_itinerary_risk(risky)
+    assert any("HIGH RISK" in warning for warning in risky.warnings)
+    assert result.best_overall is safe
+
+
+def test_observed_deal_label_never_claims_market_history() -> None:
+    assert "Building route history" in observed_deal_label(400, [450])
+    assert "Excellent" in observed_deal_label(390, [400, 450, 500])
+    assert "Expensive" in observed_deal_label(600, [400, 450, 500])

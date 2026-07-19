@@ -11,7 +11,7 @@ Last updated: 2026-07-19
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 32 automated tests passing
+- Verification: 38 automated tests passing
 
 ## User experience
 
@@ -24,8 +24,9 @@ Last updated: 2026-07-19
 - `/watch` creates a persistent price alert after showing estimated maximum
   lifetime usage and requiring confirmation.
 - `/watches`, `/history`, `/checknow`, `/unwatch`, and `/usage` manage watches.
-- The bot registers `/start`, `/search`, `/flight`, `/defaults`, `/help`, and
-  `/cancel` with Telegram during startup so typing `/` displays a command menu.
+- The bot registers all 17 owner commands with Telegram during startup so typing
+  `/` displays searches, watches, airport, history, profile, recent/repeat, and
+  support helpers.
 - One-line defaults:
   - Round trip, returning seven days later
   - One adult
@@ -38,6 +39,8 @@ Last updated: 2026-07-19
 - Before any RouteStack fare call, the bot shows a free calendar estimate based
   on broad historical Monday–Wednesday travel trends.
 - The user then chooses:
+  - Smart progressive search (one suggested date, then dates, then eligible
+    domestic nearby airports only when earlier stages remain missing or risky)
   - Search only the suggested date
   - Compare all dates within ±3 days
   - Cancel without making a fare call
@@ -49,7 +52,18 @@ Last updated: 2026-07-19
 - Each top result also provides an Expedia comparison search for the same route,
   option dates, passenger count, cabin, and airline when a single code is known.
 - RouteStack is labeled as the exact revalidated offer. Expedia is labeled as a
-  separate comparison whose itinerary and price may differ.
+  separate comparison whose itinerary and price may differ. Google Flights and
+  Kayak comparison links are also provided and do not use RouteStack tokens.
+- Unsafe itineraries are never silently filtered. Self-transfers, airport
+  changes, overnight/tight/long connections, multiple stops, and very long legs
+  remain visible with prominent warnings and ranking penalties.
+- Guided city input presents local airport choices; `/airports` lists likely
+  codes without a provider call.
+- `/profile` persists one-line airline, budget, and maximum-layover defaults.
+  `/recent` and `/repeat` reuse successful searches but still require live-search
+  confirmation.
+- Deal labels use only Postgres history observed by this bot for the resolved
+  route and currency.
 - Telegram never collects payment details or issues tickets.
 
 ## Security and ownership
@@ -69,7 +83,10 @@ Last updated: 2026-07-19
 ## Persistent price watches
 
 - Railway PostgreSQL is required through `DATABASE_URL`.
-- Watches default to one exact route/date search every 24 hours.
+- Watches default to one exact route/date search and a 24-hour base interval.
+- Scheduling conserves calls far from departure, becomes more frequent near
+  departure or a target price, and prioritizes urgent due watches within the
+  unchanged global daily cap.
 - Flexible dates and nearby airports are disabled for recurring checks.
 - Defaults: 5% drop alert, five active watches, 60-day maximum, and ten attempted
   watch searches per UTC day globally.
@@ -81,6 +98,8 @@ Last updated: 2026-07-19
 - At the daily cap, due checks move to the next UTC day and the owner is notified.
 - RouteStack revalidation remains click-only; scheduled jobs never generate
   checkout links or collect payment details.
+- Alerts disclose itinerary risks and quality regressions and separately identify
+  newly affordable nonstop options.
 
 ## API-usage safeguards
 
@@ -89,6 +108,8 @@ Last updated: 2026-07-19
 - International searches do not request nearby-airport alternatives by default.
 - Identical individual fare searches are cached in memory for five minutes.
 - Overlapping flexible-date searches can reuse cached date results.
+- Progressive stages share that cache, preventing the first date from being
+  searched twice when the bot expands.
 - Cached offers are labeled and always revalidated before checkout.
 - Confirmation screens disclose the maximum possible RouteStack search calls.
 

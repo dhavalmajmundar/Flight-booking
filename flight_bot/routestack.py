@@ -35,6 +35,16 @@ def _number(value: Any) -> float | None:
     return None
 
 
+def _flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().casefold() in {"true", "yes", "1"}
+    return False
+
+
 def _datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -470,6 +480,8 @@ class RouteStackClient:
                 last.get("arrival") or last.get("destination") or destination
             ).upper()
             layovers: list[tuple[str, int]] = []
+            airport_changes: list[tuple[str, str, int]] = []
+            overnight_layovers: list[str] = []
             for current, following in zip(group, group[1:]):
                 current_arrival = _datetime(
                     current.get("arrivalTime")
@@ -481,18 +493,34 @@ class RouteStackClient:
                     or following.get("departureAt")
                     or following.get("departure_time")
                 )
-                airport = str(
+                arrival_airport = str(
                     current.get("arrival")
                     or current.get("destination")
                     or ""
                 ).upper()
-                if current_arrival and next_departure and airport:
-                    layovers.append(
-                        (
-                            airport,
-                            _duration_minutes(current_arrival, next_departure),
-                        )
+                departure_airport = str(
+                    following.get("departure")
+                    or following.get("origin")
+                    or ""
+                ).upper()
+                if current_arrival and next_departure and arrival_airport:
+                    connection_minutes = _duration_minutes(
+                        current_arrival, next_departure
                     )
+                    layovers.append((arrival_airport, connection_minutes))
+                    if (
+                        departure_airport
+                        and departure_airport != arrival_airport
+                    ):
+                        airport_changes.append(
+                            (
+                                arrival_airport,
+                                departure_airport,
+                                connection_minutes,
+                            )
+                        )
+                    if next_departure.date() > current_arrival.date():
+                        overnight_layovers.append(arrival_airport)
             for segment in group:
                 airline = str(
                     segment.get("airline")
@@ -521,6 +549,8 @@ class RouteStackClient:
                     duration_minutes=_duration_minutes(departure, arrival),
                     stops=max(0, len(group) - 1),
                     layovers=tuple(layovers),
+                    airport_changes=tuple(airport_changes),
+                    overnight_layovers=tuple(overnight_layovers),
                 )
             )
 
@@ -559,6 +589,16 @@ class RouteStackClient:
             raw.get("fareSourceCode") or raw.get("id") or f"routestack-{index}"
         )
         display_airlines = tuple(airlines or airline_codes or ["Airline not reported"])
+        self_transfer = any(
+            _flag(raw.get(field))
+            for field in (
+                "selfTransfer",
+                "self_transfer",
+                "separateTickets",
+                "separate_tickets",
+                "virtualInterlining",
+            )
+        )
         return FlightOption(
             offer_id=offer_id,
             airlines=display_airlines,
@@ -573,6 +613,7 @@ class RouteStackClient:
             search_filter=(
                 search_filter if isinstance(search_filter, dict) else None
             ),
+            self_transfer=self_transfer,
         )
 
     async def create_checkout_url(
@@ -610,7 +651,12 @@ class RouteStackClient:
             "currency": request.currency,
         }
         if request.return_date:
-            payment_body["returnDate"] = request.return_date.isoformat()
+            selected_return = (
+                option.legs[1].departure.date()
+                if len(option.legs) > 1
+                else request.return_date
+            )
+            payment_body["returnDate"] = selected_return.isoformat()
 
         payload = await self._post(
             "/mcp/flight/get-payment-url", payment_body

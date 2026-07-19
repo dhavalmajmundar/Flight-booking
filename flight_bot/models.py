@@ -39,6 +39,7 @@ class SearchRequest:
     max_budget: float | None = None
     priority: Priority = Priority.BALANCED
     currency: str = "USD"
+    max_layover_minutes: int = 300
 
     @property
     def round_trip(self) -> bool:
@@ -54,6 +55,8 @@ class Leg:
     duration_minutes: int
     stops: int
     layovers: tuple[tuple[str, int], ...] = ()
+    airport_changes: tuple[tuple[str, str, int], ...] = ()
+    overnight_layovers: tuple[str, ...] = ()
 
 
 @dataclass
@@ -72,6 +75,7 @@ class FlightOption:
     search_filter: dict[str, Any] | None = field(default=None, repr=False)
     score: float = 0.0
     warnings: list[str] = field(default_factory=list)
+    self_transfer: bool = False
 
     @property
     def duration_minutes(self) -> int:

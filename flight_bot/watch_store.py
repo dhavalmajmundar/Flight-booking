@@ -33,6 +33,25 @@ class Watch:
         return self.id.split("-", 1)[0]
 
 
+@dataclass(frozen=True)
+class UserProfile:
+    preferred_airlines: set[str]
+    avoided_airlines: set[str]
+    max_budget: float | None
+    max_layover_minutes: int
+
+
+@dataclass(frozen=True)
+class RecentSearch:
+    id: int
+    request: SearchRequest
+    origin_code: str
+    destination_code: str
+    best_price: float
+    currency: str
+    created_at: datetime
+
+
 def request_to_json(request: SearchRequest) -> str:
     payload = {
         "origin": request.origin,
@@ -54,6 +73,7 @@ def request_to_json(request: SearchRequest) -> str:
         "max_budget": request.max_budget,
         "priority": request.priority.value,
         "currency": request.currency,
+        "max_layover_minutes": request.max_layover_minutes,
     }
     return json.dumps(payload, separators=(",", ":"))
 
@@ -70,6 +90,7 @@ def request_from_json(raw: str | dict[str, Any]) -> SearchRequest:
     payload["priority"] = Priority(payload["priority"])
     payload["preferred_airlines"] = set(payload.get("preferred_airlines", []))
     payload["avoided_airlines"] = set(payload.get("avoided_airlines", []))
+    payload.setdefault("max_layover_minutes", 300)
     return SearchRequest(**payload)
 
 
@@ -130,6 +151,33 @@ class WatchStore:
                     last_sent_date DATE NOT NULL,
                     PRIMARY KEY (user_id, notification_key)
                 );
+
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    user_id BIGINT PRIMARY KEY,
+                    preferred_airlines TEXT[] NOT NULL DEFAULT '{}',
+                    avoided_airlines TEXT[] NOT NULL DEFAULT '{}',
+                    max_budget DOUBLE PRECISION,
+                    max_layover_minutes INTEGER NOT NULL DEFAULT 300,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE TABLE IF NOT EXISTS recent_searches (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    request_json JSONB NOT NULL,
+                    origin_code TEXT NOT NULL,
+                    destination_code TEXT NOT NULL,
+                    best_price DOUBLE PRECISION NOT NULL,
+                    currency TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS recent_searches_user_idx
+                    ON recent_searches (user_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS recent_searches_route_idx
+                    ON recent_searches (
+                        user_id, origin_code, destination_code, currency,
+                        created_at DESC
+                    );
                 """
             )
 
@@ -266,14 +314,18 @@ class WatchStore:
         )
         return [self._watch(row) for row in rows]
 
-    async def claim(self, watch: Watch) -> bool:
+    async def claim(
+        self, watch: Watch, next_interval_hours: int | None = None
+    ) -> bool:
+        interval = next_interval_hours or watch.interval_hours
         result = await self._require_pool().execute(
             """
             UPDATE flight_watches
-            SET next_check_at = NOW() + make_interval(hours => interval_hours)
+            SET next_check_at = NOW() + make_interval(hours => $2::int)
             WHERE id=$1::uuid AND active AND next_check_at <= NOW()
             """,
             self._uuid(watch.id),
+            interval,
         )
         return result != "UPDATE 0"
 
@@ -380,6 +432,28 @@ class WatchStore:
         )
         return [(row["checked_at"], float(row["price"])) for row in rows]
 
+    async def latest_observation(
+        self, watch_id: str
+    ) -> tuple[float, int | None, int | None] | None:
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT price, duration_minutes, stops FROM watch_prices
+            WHERE watch_id=$1::uuid ORDER BY checked_at DESC LIMIT 1
+            """,
+            self._uuid(watch_id),
+        )
+        if not row:
+            return None
+        return (
+            float(row["price"]),
+            (
+                int(row["duration_minutes"])
+                if row["duration_minutes"] is not None
+                else None
+            ),
+            int(row["stops"]) if row["stops"] is not None else None,
+        )
+
     async def expiring_watches(self, user_id: int) -> list[Watch]:
         rows = await self._require_pool().fetch(
             """
@@ -434,3 +508,134 @@ class WatchStore:
             key,
             today,
         )
+
+    async def get_profile(self, user_id: int) -> UserProfile:
+        row = await self._require_pool().fetchrow(
+            "SELECT * FROM user_profiles WHERE user_id=$1", user_id
+        )
+        if not row:
+            return UserProfile(set(), set(), None, 300)
+        return UserProfile(
+            preferred_airlines=set(row["preferred_airlines"] or []),
+            avoided_airlines=set(row["avoided_airlines"] or []),
+            max_budget=(
+                float(row["max_budget"])
+                if row["max_budget"] is not None
+                else None
+            ),
+            max_layover_minutes=int(row["max_layover_minutes"]),
+        )
+
+    async def save_profile(
+        self, user_id: int, profile: UserProfile
+    ) -> UserProfile:
+        await self._require_pool().execute(
+            """
+            INSERT INTO user_profiles (
+                user_id, preferred_airlines, avoided_airlines,
+                max_budget, max_layover_minutes
+            ) VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id) DO UPDATE SET
+                preferred_airlines=EXCLUDED.preferred_airlines,
+                avoided_airlines=EXCLUDED.avoided_airlines,
+                max_budget=EXCLUDED.max_budget,
+                max_layover_minutes=EXCLUDED.max_layover_minutes,
+                updated_at=NOW()
+            """,
+            user_id,
+            sorted(profile.preferred_airlines),
+            sorted(profile.avoided_airlines),
+            profile.max_budget,
+            profile.max_layover_minutes,
+        )
+        return profile
+
+    async def record_search(
+        self,
+        user_id: int,
+        request: SearchRequest,
+        origin_code: str,
+        destination_code: str,
+        best_price: float,
+        currency: str,
+    ) -> None:
+        await self._require_pool().execute(
+            """
+            INSERT INTO recent_searches (
+                user_id, request_json, origin_code, destination_code,
+                best_price, currency
+            ) VALUES ($1, $2::jsonb, $3, $4, $5, $6)
+            """,
+            user_id,
+            request_to_json(request),
+            origin_code,
+            destination_code,
+            best_price,
+            currency,
+        )
+        await self._require_pool().execute(
+            """
+            DELETE FROM recent_searches
+            WHERE user_id=$1 AND id NOT IN (
+                SELECT id FROM recent_searches
+                WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50
+            )
+            """,
+            user_id,
+        )
+
+    @staticmethod
+    def _recent(row: asyncpg.Record) -> RecentSearch:
+        return RecentSearch(
+            id=int(row["id"]),
+            request=request_from_json(row["request_json"]),
+            origin_code=row["origin_code"],
+            destination_code=row["destination_code"],
+            best_price=float(row["best_price"]),
+            currency=row["currency"],
+            created_at=row["created_at"],
+        )
+
+    async def list_recent(
+        self, user_id: int, limit: int = 5
+    ) -> list[RecentSearch]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT * FROM recent_searches
+            WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2
+            """,
+            user_id,
+            limit,
+        )
+        return [self._recent(row) for row in rows]
+
+    async def get_recent(
+        self, user_id: int, position: int
+    ) -> RecentSearch | None:
+        if position < 1:
+            return None
+        rows = await self.list_recent(user_id, limit=max(5, position))
+        return rows[position - 1] if position <= len(rows) else None
+
+    async def route_prices(
+        self,
+        user_id: int,
+        origin_code: str,
+        destination_code: str,
+        currency: str,
+        limit: int = 30,
+    ) -> list[float]:
+        rows = await self._require_pool().fetch(
+            """
+            SELECT best_price FROM recent_searches
+            WHERE user_id=$1 AND origin_code=$2 AND destination_code=$3
+              AND currency=$4
+            ORDER BY created_at DESC LIMIT $5
+            """,
+            user_id,
+            origin_code,
+            destination_code,
+            currency,
+            limit,
+        )
+        return [float(row["best_price"]) for row in rows]

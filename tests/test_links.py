@@ -1,7 +1,11 @@
 from datetime import date, datetime
 from urllib.parse import parse_qs, urlparse
 
-from flight_bot.links import expedia_search_url
+from flight_bot.links import (
+    expedia_search_url,
+    google_flights_url,
+    kayak_search_url,
+)
 from flight_bot.models import Cabin, FlightOption, Leg, SearchRequest
 
 
@@ -87,3 +91,9 @@ def test_expedia_one_way_link_uses_same_end_date() -> None:
     )
     parsed = urlparse(expedia_search_url(option, request))
     assert parsed.path.endswith("/oneway/2026-09-16/2026-09-16")
+
+    google = google_flights_url(option, request)
+    kayak = kayak_search_url(option, request)
+    assert "google.com/travel/flights" in google
+    assert "JFK" in google and "LAX" in google
+    assert "/JFK-LAX/2026-09-16/1adult" in kayak

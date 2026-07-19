@@ -1,6 +1,11 @@
 import asyncio
 
-from flight_bot.airports import is_domestic, local_airport, smart_baggage
+from flight_bot.airports import (
+    is_domestic,
+    local_airport,
+    local_airport_suggestions,
+    smart_baggage,
+)
 from flight_bot.config import Settings
 from flight_bot.routestack import RouteStackClient
 
@@ -22,6 +27,14 @@ def test_local_airports_detect_domestic_and_international_baggage() -> None:
     assert smart_baggage(jfk[2], lhr[2]) == (2, 1)
     assert is_domestic(jfk[2], lax[2]) is True
     assert is_domestic(jfk[2], lhr[2]) is False
+
+
+def test_city_state_airport_suggestions_are_local_and_useful() -> None:
+    new_york = local_airport_suggestions("New York, NY")
+    assert [item[0] for item in new_york[:3]] == ["JFK", "LGA", "EWR"]
+    london_ontario = local_airport_suggestions("London, Ontario")
+    assert london_ontario
+    assert london_ontario[0][2] == "CA"
 
 
 def test_exact_iata_resolution_does_not_call_provider() -> None:

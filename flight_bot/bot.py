@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+from dataclasses import asdict, replace
 from datetime import date, timedelta
 
 from telegram import (
@@ -28,14 +29,18 @@ from telegram.ext import (
 )
 
 from .config import Settings
-from .airports import is_domestic, local_airport
+from .airports import (
+    is_domestic,
+    local_airport,
+    local_airport_suggestions,
+)
 from .command_input import command_arguments
 from .formatting import format_results, selected_results
-from .links import expedia_search_url
+from .links import expedia_search_url, google_flights_url, kayak_search_url
 from .models import Cabin, FlightOption, Priority, SearchRequest
-from .ranking import rank_flights
+from .ranking import itinerary_risks, rank_flights
 from .routestack import FlightSearchError, RouteStackClient
-from .watch_store import WatchStore
+from .watch_store import UserProfile, WatchStore
 from .watching import (
     WATCH_CONFIRM,
     activate_watch,
@@ -94,6 +99,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/checknow WATCH_ID — queue one token-capped check\n"
         "/unwatch WATCH_ID — stop an alert\n"
         "/usage — today's watch-token usage\n\n"
+        "Free helpers (no RouteStack search token):\n"
+        "/airports New York, NY — local airport-code suggestions\n"
+        "/recent — recent successful searches\n"
+        "/repeat 1 — review and confirm a recent search\n"
+        "/profile — saved airline, budget, and layover preferences\n\n"
         "For a one-line request:\n"
         "/flight JFK LAX 2026-09-15\n\n"
         "For cities with spaces:\n"
@@ -105,7 +115,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Override with options such as --return 2026-09-20 --nights 5 "
         "--trip one-way --adults 2 --cabin business --flex no --nearby yes "
         "--bags 1 --carry-on 1 --prefer DL,UA --avoid NK,F9 --budget 1200 "
-        "--priority balanced\n\n"
+        "--priority balanced --max-layover 240\n\n"
+        "Smart progressive search tries one suggested date first, expands to "
+        "±3 days only when needed, then checks eligible domestic nearby airports "
+        "only if results remain missing or risky. The confirmation always shows "
+        "the maximum possible search-token use.\n\n"
         "Airport codes such as JFK work best, but city or airport names are accepted."
     )
 
@@ -122,8 +136,10 @@ async def defaults_command(
         "• Domestic baggage: 0 checked + 1 carry-on\n"
         "• International baggage: 2 checked + 1 carry-on\n"
         "• Balanced ranking\n\n"
-        "Before searching, choose the free suggested-date estimate or the full "
-        "live ±3-day comparison. Use /help for every one-line override."
+        "Before searching, choose smart progressive search, the free suggested-date "
+        "estimate, or the full live ±3-day comparison. Risky itineraries remain "
+        "visible but receive prominent warnings and a ranking penalty. Use /help "
+        "for every one-line override."
     )
 
 
@@ -137,6 +153,10 @@ BOT_COMMANDS = (
     BotCommand("checknow", "Queue one watch check"),
     BotCommand("usage", "Show today's watch token usage"),
     BotCommand("unwatch", "Stop a price watch"),
+    BotCommand("airports", "Find airport codes locally"),
+    BotCommand("recent", "Show recent successful searches"),
+    BotCommand("repeat", "Repeat a recent search"),
+    BotCommand("profile", "View or update saved preferences"),
     BotCommand("defaults", "Show smart search defaults"),
     BotCommand("help", "Show commands and one-line options"),
     BotCommand("cancel", "Cancel the current search"),
@@ -271,6 +291,7 @@ def parse_flight_command(args: list[str]) -> dict:
         "avoided_airlines": set(),
         "max_budget": None,
         "priority": Priority.BALANCED,
+        "max_layover_minutes": 300,
     }
     value_options = {
         "--return",
@@ -286,6 +307,7 @@ def parse_flight_command(args: list[str]) -> dict:
         "--avoid",
         "--budget",
         "--priority",
+        "--max-layover",
     }
     index = 3
     while index < len(args):
@@ -390,8 +412,44 @@ def parse_flight_command(args: list[str]) -> dict:
                 raise ValueError(
                     "--priority must be balanced, cheapest, fastest, or nonstop"
                 ) from exc
+        elif option == "--max-layover":
+            try:
+                minutes = int(value.lower().replace("minutes", "").replace("min", ""))
+            except ValueError as exc:
+                raise ValueError("--max-layover must be 60 to 720 minutes") from exc
+            if not 60 <= minutes <= 720:
+                raise ValueError("--max-layover must be 60 to 720 minutes")
+            trip["max_layover_minutes"] = minutes
         index += 2
     return trip
+
+
+def _profile_option_present(args: list[str], option: str) -> bool:
+    return any(item.lower() == option for item in args[3:])
+
+
+async def _apply_saved_profile(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int | None,
+    trip: dict,
+    args: list[str],
+) -> None:
+    store: WatchStore | None = context.application.bot_data.get("watch_store")
+    if not store or user_id is None:
+        return
+    try:
+        profile = await store.get_profile(user_id)
+    except Exception:
+        logger.exception("Could not load saved profile; using command defaults")
+        return
+    if not _profile_option_present(args, "--prefer"):
+        trip["preferred_airlines"] = set(profile.preferred_airlines)
+    if not _profile_option_present(args, "--avoid"):
+        trip["avoided_airlines"] = set(profile.avoided_airlines)
+    if not _profile_option_present(args, "--budget"):
+        trip["max_budget"] = profile.max_budget
+    if not _profile_option_present(args, "--max-layover"):
+        trip["max_layover_minutes"] = profile.max_layover_minutes
 
 
 async def flight_command(
@@ -400,6 +458,12 @@ async def flight_command(
     try:
         args = command_arguments(update.message.text, context.args)
         trip = parse_flight_command(args)
+        await _apply_saved_profile(
+            context,
+            update.effective_user.id if update.effective_user else None,
+            trip,
+            args,
+        )
     except ValueError as exc:
         await update.message.reply_text(
             f"Invalid flight command: {exc}\n\n"
@@ -414,13 +478,72 @@ async def flight_command(
 
 
 async def origin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["trip"]["origin"] = update.message.text.strip()
+    text = update.message.text.strip()
+    pending = context.user_data.pop("pending_origin_airports", None)
+    if pending:
+        if text.startswith("Use city: "):
+            text = pending["query"]
+        else:
+            code = text.split(" — ", 1)[0].strip().upper()
+            if code not in pending["codes"]:
+                context.user_data["pending_origin_airports"] = pending
+                await update.message.reply_text("Choose an airport button or Use city.")
+                return ORIGIN
+            text = code
+    else:
+        suggestions = local_airport_suggestions(text)
+        if len(suggestions) > 1:
+            choices = [f"{code} — {label.split('] ', 1)[-1][:32]}" for code, label, _ in suggestions]
+            context.user_data["pending_origin_airports"] = {
+                "query": text,
+                "codes": {code for code, _, _ in suggestions},
+            }
+            await update.message.reply_text(
+                "I found several local airport choices. Pick one for precision, "
+                "or keep the city so RouteStack can choose at search time. "
+                "This local check used no RouteStack search token.",
+                reply_markup=_keyboard(
+                    *((choice,) for choice in choices),
+                    (f"Use city: {text}",),
+                ),
+            )
+            return ORIGIN
+    context.user_data["trip"]["origin"] = text
     await update.message.reply_text("Where are you flying to?")
     return DESTINATION
 
 
 async def destination(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["trip"]["destination"] = update.message.text.strip()
+    text = update.message.text.strip()
+    pending = context.user_data.pop("pending_destination_airports", None)
+    if pending:
+        if text.startswith("Use city: "):
+            text = pending["query"]
+        else:
+            code = text.split(" — ", 1)[0].strip().upper()
+            if code not in pending["codes"]:
+                context.user_data["pending_destination_airports"] = pending
+                await update.message.reply_text("Choose an airport button or Use city.")
+                return DESTINATION
+            text = code
+    else:
+        suggestions = local_airport_suggestions(text)
+        if len(suggestions) > 1:
+            choices = [f"{code} — {label.split('] ', 1)[-1][:32]}" for code, label, _ in suggestions]
+            context.user_data["pending_destination_airports"] = {
+                "query": text,
+                "codes": {code for code, _, _ in suggestions},
+            }
+            await update.message.reply_text(
+                "I found several destination airports. Pick one for precision, "
+                "or keep the city. No RouteStack search token was used.",
+                reply_markup=_keyboard(
+                    *((choice,) for choice in choices),
+                    (f"Use city: {text}",),
+                ),
+            )
+            return DESTINATION
+    context.user_data["trip"]["destination"] = text
     await update.message.reply_text(
         "Departure date? Use YYYY-MM-DD, for example 2026-09-15."
     )
@@ -685,6 +808,7 @@ async def show_confirmation(
             "RouteStack search token(s).\n"
         )
         confirmation_buttons = (
+            "Smart progressive search",
             "Search suggested date",
             "Compare all ±3 days",
             "Cancel",
@@ -695,6 +819,26 @@ async def show_confirmation(
         "Full flexible comparison"
         if trip["flexible_dates"]
         else "Planned search"
+    )
+
+    airport_hint_lines: list[str] = []
+    for label, value in (
+        ("Origin", trip["origin"]),
+        ("Destination", trip["destination"]),
+    ):
+        suggestions = local_airport_suggestions(str(value))
+        if len(suggestions) > 1:
+            codes = ", ".join(code for code, _, _ in suggestions)
+            airport_hint_lines.append(
+                f"{label} local airport choices: {codes}. Use a code for precision; "
+                "keeping the city lets RouteStack choose."
+            )
+    airport_hint = (
+        "\n🛫 Local airport check (no API token):\n"
+        + "\n".join(airport_hint_lines)
+        + "\n"
+        if airport_hint_lines
+        else ""
     )
 
     await update.message.reply_text(
@@ -709,6 +853,7 @@ async def show_confirmation(
         f"{usage_label}: up to {maximum_provider_calls} "
         f"RouteStack search token(s).\n"
         f"{date_advice}\n"
+        f"{airport_hint}"
         "Search live fares now?",
         reply_markup=_keyboard(*((button,) for button in confirmation_buttons)),
     )
@@ -762,7 +907,10 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if answer == "cancel":
         return await cancel(update, context)
     trip = context.user_data["trip"]
-    if answer == "search suggested date" and trip["flexible_dates"]:
+    progressive = answer == "smart progressive search" and trip["flexible_dates"]
+    if progressive:
+        trip.pop("suggested_departure_date", None)
+    elif answer == "search suggested date" and trip["flexible_dates"]:
         suggested = trip.pop("suggested_departure_date")
         shift = suggested - trip["departure_date"]
         trip["departure_date"] = suggested
@@ -775,7 +923,8 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         trip.pop("suggested_departure_date", None)
     else:
         await update.message.reply_text(
-            "Choose Search suggested date, Compare all ±3 days, or Cancel."
+            "Choose Smart progressive search, Search suggested date, "
+            "Compare all ±3 days, or Cancel."
             if trip["flexible_dates"]
             else "Choose Search now or Cancel."
         )
@@ -789,7 +938,21 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     request = SearchRequest(currency=settings.default_currency, **trip)
     client: RouteStackClient = context.application.bot_data["routestack"]
     try:
-        offers, origin_label, destination_label = await client.search(request)
+        if progressive:
+            (
+                offers,
+                origin_label,
+                destination_label,
+                request,
+                search_note,
+            ) = await _progressive_search(client, request)
+        else:
+            offers, origin_label, destination_label = await client.search(request)
+            search_note = (
+                "full ±3-day and eligible nearby-airport comparison"
+                if request.flexible_dates
+                else "single-date search"
+            )
         results = rank_flights(offers, request)
         if not results:
             await update.message.reply_text(
@@ -797,8 +960,37 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 "budget, fewer baggage restrictions, or nearby airports."
             )
         else:
+            observed_prices: list[float] | None = None
+            store: WatchStore | None = context.application.bot_data.get("watch_store")
+            user_id = update.effective_user.id if update.effective_user else None
+            best = results.cheapest
+            if store and user_id is not None:
+                try:
+                    route_origin = best.legs[0].origin
+                    route_destination = best.legs[0].destination
+                    observed_prices = await store.route_prices(
+                        user_id,
+                        route_origin,
+                        route_destination,
+                        best.currency,
+                    )
+                    await store.record_search(
+                        user_id,
+                        request,
+                        route_origin,
+                        route_destination,
+                        best.total_price,
+                        best.currency,
+                    )
+                except Exception:
+                    logger.exception("Could not update saved search history")
             message = format_results(
-                results, request, origin_label, destination_label
+                results,
+                request,
+                origin_label,
+                destination_label,
+                observed_prices=observed_prices,
+                search_note=search_note,
             )
             await update.message.reply_text(
                 message,
@@ -823,6 +1015,100 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     finally:
         context.user_data.pop("trip", None)
     return ConversationHandler.END
+
+
+def _deduplicate_offers(offers: list[FlightOption]) -> list[FlightOption]:
+    unique: dict[tuple, FlightOption] = {}
+    for offer in offers:
+        key = (
+            offer.airline_codes,
+            tuple((leg.origin, leg.destination, leg.departure, leg.arrival) for leg in offer.legs),
+            offer.total_price,
+        )
+        unique.setdefault(key, offer)
+    return list(unique.values())
+
+
+def _has_satisfactory_offer(
+    offers: list[FlightOption], request: SearchRequest
+) -> bool:
+    results = rank_flights(offers, request)
+    return bool(
+        results
+        and any(
+            not itinerary_risks(option)
+            for option in results.ordered[:5]
+        )
+    )
+
+
+async def _progressive_search(
+    client: RouteStackClient, request: SearchRequest
+) -> tuple[list[FlightOption], str, str, SearchRequest, str]:
+    """Spend search calls in stages and stop once a usable itinerary appears."""
+    suggested = suggested_departure_date(request.departure_date)
+    shift = suggested - request.departure_date
+    first_request = replace(
+        request,
+        departure_date=suggested,
+        return_date=(request.return_date + shift if request.return_date else None),
+        flexible_dates=False,
+        nearby_airports=False,
+        auto_nearby=False,
+    )
+    offers, origin_label, destination_label = await client.search(first_request)
+    if _has_satisfactory_offer(offers, first_request):
+        return (
+            offers,
+            origin_label,
+            destination_label,
+            first_request,
+            "stopped after 1 suggested-date search because usable results were found",
+        )
+
+    date_request = replace(
+        request,
+        flexible_dates=True,
+        nearby_airports=False,
+        auto_nearby=False,
+    )
+    date_offers, origin_label, destination_label = await client.search(date_request)
+    combined = _deduplicate_offers([*offers, *date_offers])
+    if _has_satisfactory_offer(combined, date_request):
+        return (
+            combined,
+            origin_label,
+            destination_label,
+            date_request,
+            "expanded to ±3 days because the first stage had no usable low-risk result",
+        )
+
+    if not request.auto_nearby and not request.nearby_airports:
+        return (
+            combined,
+            origin_label,
+            destination_label,
+            date_request,
+            "expanded to ±3 days; nearby airports were disabled by the request",
+        )
+    airport_request = replace(request, flexible_dates=True)
+    airport_offers, origin_label, destination_label = await client.search(
+        airport_request
+    )
+    combined = _deduplicate_offers([*combined, *airport_offers])
+    airport_note = (
+        "expanded to eligible domestic nearby airports after date results "
+        "remained limited or risky"
+        if airport_request.nearby_airports
+        else "expanded to ±3 days; nearby airports stayed off for this route"
+    )
+    return (
+        combined,
+        origin_label,
+        destination_label,
+        airport_request,
+        airport_note,
+    )
 
 
 def _store_booking_options(
@@ -852,8 +1138,10 @@ def _booking_keyboard(
     token, options, request = handoff
     if not options:
         return None
-    return InlineKeyboardMarkup(
-        [
+    rows: list[list[InlineKeyboardButton]] = []
+    for rank, option in enumerate(options, 1):
+        rows.extend(
+            [
             [
                 InlineKeyboardButton(
                     f"Exact option #{rank}",
@@ -864,9 +1152,20 @@ def _booking_keyboard(
                     url=expedia_search_url(option, request),
                 ),
             ]
-            for rank, option in enumerate(options, 1)
-        ]
-    )
+            ,
+            [
+                InlineKeyboardButton(
+                    f"Google Flights #{rank}",
+                    url=google_flights_url(option, request),
+                ),
+                InlineKeyboardButton(
+                    f"Kayak #{rank}",
+                    url=kayak_search_url(option, request),
+                ),
+            ],
+            ]
+        )
+    return InlineKeyboardMarkup(rows)
 
 
 async def checkout_callback(
@@ -919,8 +1218,18 @@ async def checkout_callback(
                         InlineKeyboardButton(
                             "Compare on Expedia",
                             url=expedia_search_url(option, request),
+                        ),
+                        InlineKeyboardButton(
+                            "Google Flights",
+                            url=google_flights_url(option, request),
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "Compare on Kayak",
+                            url=kayak_search_url(option, request),
                         )
-                    ]
+                    ],
                 ]
             ),
         )
@@ -938,10 +1247,197 @@ async def checkout_callback(
                     InlineKeyboardButton(
                         "Compare on Expedia",
                         url=expedia_search_url(option, request),
+                    ),
+                    InlineKeyboardButton(
+                        "Google Flights",
+                        url=google_flights_url(option, request),
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        "Compare on Kayak",
+                        url=kayak_search_url(option, request),
                     )
                 ],
             ]
         ),
+    )
+
+
+async def airports_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = " ".join(context.args).strip()
+    if not query:
+        await update.message.reply_text(
+            "Use /airports followed by a city and optional state, for example:\n"
+            "/airports New York, NY\n\n"
+            "This helper uses the bot's local airport database and no RouteStack "
+            "search token."
+        )
+        return
+    suggestions = local_airport_suggestions(query, limit=8)
+    if not suggestions:
+        await update.message.reply_text(
+            f"No local airport match was found for “{query}”. Try the guided "
+            "/search flow; provider location resolution occurs only when you "
+            "confirm a live search."
+        )
+        return
+    lines = [
+        f"🛫 Local airport matches for {query}",
+        "No RouteStack search token used.",
+        "",
+    ]
+    lines.extend(f"• {code} — {label}" for code, label, _ in suggestions)
+    lines.append("\nUse the three-letter code in /flight for the most precise result.")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def recent_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    store: WatchStore | None = context.application.bot_data.get("watch_store")
+    user_id = update.effective_user.id if update.effective_user else None
+    if not store or user_id is None:
+        await update.message.reply_text(
+            "Recent searches require the configured Railway Postgres database."
+        )
+        return
+    recent = await store.list_recent(user_id, limit=5)
+    if not recent:
+        await update.message.reply_text(
+            "No successful searches are saved yet. Run /flight or /search first."
+        )
+        return
+    lines = ["🕘 Recent successful searches"]
+    for position, item in enumerate(recent, 1):
+        lines.append(
+            f"{position}. {item.request.origin} → {item.request.destination} | "
+            f"{item.request.departure_date} | {item.currency} "
+            f"{item.best_price:,.2f}"
+        )
+    lines.append(
+        "\nUse /repeat NUMBER to review and confirm one. Listing and repeating "
+        "use no search token until you approve the live search."
+    )
+    await update.message.reply_text("\n".join(lines))
+
+
+async def repeat_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    store: WatchStore | None = context.application.bot_data.get("watch_store")
+    user_id = update.effective_user.id if update.effective_user else None
+    if not store or user_id is None:
+        await update.message.reply_text(
+            "Repeat search requires the configured Railway Postgres database."
+        )
+        return ConversationHandler.END
+    try:
+        position = int(context.args[0]) if context.args else 1
+    except ValueError:
+        await update.message.reply_text("Use /repeat NUMBER, for example /repeat 1.")
+        return ConversationHandler.END
+    recent = await store.get_recent(user_id, position)
+    if not recent:
+        await update.message.reply_text(
+            "That recent-search number was not found. Use /recent to list them."
+        )
+        return ConversationHandler.END
+    context.user_data["trip"] = asdict(recent.request)
+    return await show_confirmation(update, context)
+
+
+def _profile_text(profile: UserProfile) -> str:
+    preferred = ",".join(sorted(profile.preferred_airlines)) or "none"
+    avoided = ",".join(sorted(profile.avoided_airlines)) or "none"
+    budget = (
+        f"${profile.max_budget:,.2f}" if profile.max_budget is not None else "none"
+    )
+    return (
+        "👤 Saved one-line search profile\n"
+        f"Preferred airlines: {preferred}\n"
+        f"Avoided airlines: {avoided}\n"
+        f"Default budget: {budget}\n"
+        f"Maximum preferred layover: {profile.max_layover_minutes} minutes"
+    )
+
+
+async def profile_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    store: WatchStore | None = context.application.bot_data.get("watch_store")
+    user_id = update.effective_user.id if update.effective_user else None
+    if not store or user_id is None:
+        await update.message.reply_text(
+            "Saved profiles require the configured Railway Postgres database."
+        )
+        return
+    current = await store.get_profile(user_id)
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            _profile_text(current)
+            + "\n\nUpdate example:\n"
+            "/profile --prefer DL,UA --avoid NK,F9 --budget 900 "
+            "--max-layover 240\n"
+            "Use /profile --clear to restore defaults. This command uses no "
+            "RouteStack search token."
+        )
+        return
+    if len(args) == 1 and args[0].lower() == "--clear":
+        saved = await store.save_profile(
+            user_id, UserProfile(set(), set(), None, 300)
+        )
+        await update.message.reply_text(_profile_text(saved) + "\nProfile reset.")
+        return
+    preferred = set(current.preferred_airlines)
+    avoided = set(current.avoided_airlines)
+    budget = current.max_budget
+    max_layover = current.max_layover_minutes
+    allowed = {"--prefer", "--avoid", "--budget", "--max-layover"}
+    index = 0
+    try:
+        while index < len(args):
+            option = args[index].lower()
+            if option not in allowed or index + 1 >= len(args):
+                raise ValueError(
+                    "use --prefer, --avoid, --budget, or --max-layover with a value"
+                )
+            value = args[index + 1]
+            if option == "--prefer":
+                preferred = _airline_codes(value, option)
+            elif option == "--avoid":
+                avoided = _airline_codes(value, option)
+            elif option == "--budget":
+                if value.lower() in {"none", "off"}:
+                    budget = None
+                else:
+                    budget = float(value.replace("$", "").replace(",", ""))
+                    if budget <= 0:
+                        raise ValueError("--budget must be positive or none")
+            else:
+                max_layover = int(value)
+                if not 60 <= max_layover <= 720:
+                    raise ValueError("--max-layover must be 60 to 720 minutes")
+            index += 2
+    except (ValueError, IndexError) as exc:
+        await update.message.reply_text(f"Invalid profile update: {exc}")
+        return
+    if preferred.intersection(avoided):
+        await update.message.reply_text(
+            "The same airline cannot be both preferred and avoided."
+        )
+        return
+    saved = await store.save_profile(
+        user_id,
+        UserProfile(preferred, avoided, budget, max_layover),
+    )
+    await update.message.reply_text(
+        _profile_text(saved)
+        + "\n\nThese defaults apply to /flight unless that command overrides them. "
+        "No RouteStack search token was used."
     )
 
 
@@ -957,6 +1453,21 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Use /search to start a flight search.")
+
+
+async def error_handler(
+    update: object, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    logger.error(
+        "Unhandled Telegram update error",
+        exc_info=(
+            type(context.error),
+            context.error,
+            context.error.__traceback__,
+        )
+        if context.error
+        else None,
+    )
 
 
 async def on_shutdown(application: Application) -> None:
@@ -985,6 +1496,7 @@ def build_application(settings: Settings) -> Application:
         entry_points=[
             CommandHandler("search", begin_search),
             CommandHandler("flight", flight_command),
+            CommandHandler("repeat", repeat_command),
         ],
         states={
             ORIGIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, origin)],
@@ -1030,6 +1542,9 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("checknow", checknow_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("unwatch", unwatch_command))
+    application.add_handler(CommandHandler("airports", airports_command))
+    application.add_handler(CommandHandler("recent", recent_command))
+    application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(watch_conversation)
     application.add_handler(conversation)
     application.add_handler(
@@ -1039,4 +1554,5 @@ def build_application(settings: Settings) -> Application:
         )
     )
     application.add_handler(MessageHandler(filters.TEXT, unknown))
+    application.add_error_handler(error_handler)
     return application

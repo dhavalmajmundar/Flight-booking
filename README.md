@@ -20,6 +20,8 @@ The bot does **not** search in the background and does **not** invent prices.
 - Daily watch-token cap, automatic pausing, price history, daily digests, weekly
   summaries, expiry reminders, and observed-history book/wait guidance
 - One-line `/flight` command with optional filters
+- Smart progressive search that starts with one suggested date, expands to ±3
+  days only when needed, and checks eligible domestic nearby airports last
 - Smart `/flight` defaults: 7-night round trip, one adult, economy, flexible
   dates, nearby airports for domestic routes only, and route-aware baggage
 - Local IATA airport/country resolution to avoid provider calls for exact codes
@@ -36,6 +38,14 @@ The bot does **not** search in the background and does **not** invent prices.
 - Optional nearby-airport comparison within roughly 100 km
 - Checked-bag, airline avoidance, budget, and optimization preferences
 - Best overall, cheapest, fastest, and flexible-date picks
+- Prominent, non-blocking warnings and ranking penalties for self-transfers,
+  airport changes, overnight connections, tight/long layovers, multiple stops,
+  and very long itineraries
+- Google Flights and Kayak comparison links alongside Expedia and exact
+  RouteStack checkout; comparison-link creation uses no RouteStack search token
+- Local `/airports CITY, STATE` helper and guided airport-choice buttons
+- Postgres-backed `/profile`, `/recent`, and `/repeat` helpers
+- Route-history deal labels based only on fares this bot previously observed
 - Cheapest departure-day table across the live ±3-day search, including savings
   versus the requested date
 - No-call calendar estimate before confirmation, with a choice between one
@@ -120,6 +130,13 @@ Watch commands:
 - `/unwatch WATCH_ID` stops a watch.
 - `/usage` shows today's watch-token attempts and the configured cap.
 
+Watch scheduling is urgency-aware while remaining inside the same global daily
+cap. It checks less often when departure is far away, then may increase frequency
+near departure or when the observed fare approaches the target. Due watches
+closest to their targets and travel dates are considered first. Alerts keep
+cheaper risky itineraries visible, identify quality tradeoffs, and call out when
+an affordable nonstop becomes available.
+
 Safe defaults are one exact route/date search every 24 hours, a 5% meaningful
 drop threshold, at most five active watches, and at most 60 days. Flexible dates
 and nearby airports are disabled for recurring checks, so each check attempts no
@@ -173,8 +190,35 @@ to restore route-aware baggage after a manual override.
 The bot still asks for confirmation before spending RouteStack search tokens.
 When flexible dates are enabled, that confirmation first shows a free calendar
 estimate favoring Monday–Wednesday departures within ±3 days. Users can search
-only that suggested date to reduce provider usage or choose the complete live
-comparison. The estimate is a broad historical pattern, not a live price claim.
+only that suggested date, choose smart progressive search, or choose the complete
+live comparison. Progressive mode stops after one call when it finds a usable
+low-risk result; otherwise it expands to nearby dates and finally eligible
+domestic nearby airports. The estimate is a broad historical pattern, not a live
+price claim.
+
+## Free helpers and saved preferences
+
+These commands do not call RouteStack's flight-search endpoint:
+
+```text
+/airports New York, NY
+/recent
+/repeat 1
+/profile
+/profile --prefer DL,UA --avoid NK,F9 --budget 900 --max-layover 240
+/profile --clear
+```
+
+`/airports` uses the bundled airport database. During guided `/search`, ambiguous
+city input presents airport choices before the confirmation screen. One-line
+city/state searches show likely local codes at confirmation; using a three-letter
+code remains the most precise choice.
+
+Successful searches are retained in Postgres as a bounded recent list. `/repeat`
+loads a previous request and still requires confirmation before any live call.
+The profile supplies defaults to `/flight` unless the command explicitly
+overrides them. Historical deal labels compare only with this bot's saved results
+for the same resolved route and currency; they are not market-wide predictions.
 
 ## Booking handoff
 
@@ -185,9 +229,11 @@ The final price, baggage allowance, and change/cancellation rules must be review
 there before payment.
 
 Each top option also has an Expedia comparison button built from Expedia's
-documented flight deeplink format. RouteStack is the revalidated selected offer;
-Expedia performs a separate search and may show a different itinerary, baggage
-allowance, or price. No affiliate or price-match claim is made.
+documented flight deeplink format, plus Google Flights and Kayak search links.
+RouteStack is the revalidated selected offer; comparison sites perform separate
+searches and may show a different itinerary, baggage allowance, or price. No
+affiliate or price-match claim is made, and opening/building those comparison
+links does not spend RouteStack search tokens.
 
 Each handoff click writes an aggregate-friendly event to the application log with
 the route, result rank, and source. It deliberately does not log the Telegram user
@@ -236,6 +282,9 @@ docker run --env-file .env --restart unless-stopped flight-bot
   labeled, and a selected fare is always revalidated before checkout.
 - Nearby-airport mode checks up to two alternatives at each end on the requested
   dates. It deliberately avoids a large date × airport combination search.
+- Progressive mode reuses the five-minute cache between stages. A suggested date
+  already searched in stage one is not billed again when the bot expands to the
+  seven-date window.
 - RouteStack prices one completed search as one token. Combining flexible dates
   and nearby airports can therefore use up to 11 tokens for one Telegram request;
   the confirmation screen shows this maximum before searching.

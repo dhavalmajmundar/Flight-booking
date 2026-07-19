@@ -6,8 +6,10 @@ from flight_bot.watch_store import request_from_json, request_to_json
 from flight_bot.watch_store import Watch
 from flight_bot.watching import (
     _alert_reasons,
+    adaptive_watch_interval_hours,
     observed_price_guidance,
     parse_watch_command,
+    watch_urgency_key,
 )
 
 
@@ -34,7 +36,7 @@ def test_watch_safe_defaults_use_one_exact_search() -> None:
     assert pending.request.nearby_airports is False
     assert pending.interval_hours == 24
     assert pending.drop_percent == 5
-    assert pending.maximum_checks <= 60
+    assert 60 < pending.maximum_checks <= 240
 
 
 def test_watch_overrides_and_request_round_trip_serialization() -> None:
@@ -68,6 +70,7 @@ def test_watch_overrides_and_request_round_trip_serialization() -> None:
     assert restored.return_date == date(2026, 9, 25)
     assert restored.cabin == Cabin.BUSINESS
     assert restored.preferred_airlines == {"BA", "AA"}
+    assert restored.max_layover_minutes == 300
 
 
 def test_observed_guidance_uses_only_watch_history() -> None:
@@ -101,3 +104,28 @@ def test_alerts_are_meaningful_and_deduplicated() -> None:
     }
     watch.last_alert_price = 440
     assert _alert_reasons(watch, 440) == []
+
+
+def test_adaptive_watch_schedule_saves_calls_far_out_and_increases_urgency() -> None:
+    pending = parse_watch_command(
+        ["JFK", "LAX", "2026-12-20"],
+        settings(),
+        now=datetime(2026, 7, 19, tzinfo=timezone.utc),
+    )
+    watch = Watch(
+        id="00000000-0000-0000-0000-000000000002",
+        user_id=123,
+        request=pending.request,
+        target_price=450,
+        drop_percent=5,
+        interval_hours=24,
+        expires_at=pending.expires_at,
+        next_check_at=datetime(2026, 7, 19, tzinfo=timezone.utc),
+        last_price=600,
+    )
+    now = datetime(2026, 7, 19, tzinfo=timezone.utc)
+    assert adaptive_watch_interval_hours(watch, now) == 48
+    watch.request.departure_date = date(2026, 7, 30)
+    assert adaptive_watch_interval_hours(watch, now) == 12
+    watch.last_price = 460
+    assert watch_urgency_key(watch, now)[0] < 1

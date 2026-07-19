@@ -29,6 +29,7 @@ from telegram.ext import (
 
 from .config import Settings
 from .airports import is_domestic, local_airport
+from .command_input import command_arguments
 from .formatting import format_results, selected_results
 from .links import expedia_search_url
 from .models import Cabin, FlightOption, Priority, SearchRequest
@@ -95,6 +96,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/usage — today's watch-token usage\n\n"
         "For a one-line request:\n"
         "/flight JFK LAX 2026-09-15\n\n"
+        "For cities with spaces:\n"
+        "/flight New York, NY | Los Angeles, CA | 2026-09-15\n\n"
         "Smart defaults: round trip returning after 7 nights, 1 adult, economy, "
         "flexible dates, nearby airports for domestic trips only, and automatic "
         "baggage (0 checked "
@@ -252,8 +255,8 @@ def parse_flight_command(args: list[str]) -> dict:
         raise ValueError("departure must be a future date in YYYY-MM-DD format")
 
     trip: dict = {
-        "origin": args[0],
-        "destination": args[1],
+        "origin": args[0].strip().replace("_", " "),
+        "destination": args[1].strip().replace("_", " "),
         "departure_date": departure_value,
         "return_date": departure_value + timedelta(days=7),
         "adults": 1,
@@ -395,7 +398,8 @@ async def flight_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     try:
-        trip = parse_flight_command(context.args)
+        args = command_arguments(update.message.text, context.args)
+        trip = parse_flight_command(args)
     except ValueError as exc:
         await update.message.reply_text(
             f"Invalid flight command: {exc}\n\n"

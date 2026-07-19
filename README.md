@@ -141,6 +141,16 @@ For a minimal one-line search:
 /flight JFK LAX 2026-09-15
 ```
 
+Airport codes are optional. For multi-word cities, states, or full airport names,
+separate the three required fields with `|`:
+
+```text
+/flight New York, NY | Los Angeles, CA | 2026-09-15
+/watch New York, NY | Los Angeles, CA | 2026-09-15 --return 2026-09-22 --target 350
+```
+
+Single-word cities continue to work in the normal space-separated format.
+
 That command defaults to a round trip returning seven days later, one adult,
 economy, flexible dates within ±3 days, domestic-only nearby airports, and
 balanced ranking.

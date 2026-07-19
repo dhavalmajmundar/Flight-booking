@@ -11,12 +11,15 @@ Last updated: 2026-07-19
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 29 automated tests passing
+- Verification: 32 automated tests passing
 
 ## User experience
 
 - `/search` starts the guided search.
 - `/flight ORIGIN DESTINATION YYYY-MM-DD` starts a one-line search.
+- Multi-word cities, states, and airport names use pipe separators, for example
+  `/flight New York, NY | Los Angeles, CA | 2026-09-15`. The same format works
+  for `/watch`.
 - `/defaults` explains the smart defaults without using RouteStack.
 - `/watch` creates a persistent price alert after showing estimated maximum
   lifetime usage and requiring confirmation.
@@ -99,6 +102,7 @@ Last updated: 2026-07-19
 - `flight_bot/links.py`: documented external comparison deeplinks
 - `flight_bot/airports.py`: local airport and country helpers
 - `flight_bot/config.py`: environment configuration
+- `flight_bot/command_input.py`: normal and multi-word command parsing
 - `flight_bot/watch_store.py`: PostgreSQL schema and persistent watch operations
 - `flight_bot/watching.py`: watch commands, scheduler, alerts, digests, and caps
 - `tests/`: automated regression tests

@@ -12,6 +12,7 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
 
 from .config import Settings
+from .command_input import command_arguments
 from .links import expedia_search_url
 from .models import Cabin, FlightOption, Priority, SearchRequest
 from .ranking import rank_flights
@@ -163,8 +164,8 @@ def parse_watch_command(
         math.ceil((expires_at - now).total_seconds() / (interval_hours * 3600)),
     )
     request = SearchRequest(
-        origin=args[0].upper(),
-        destination=args[1].upper(),
+        origin=args[0].strip().replace("_", " "),
+        destination=args[1].strip().replace("_", " "),
         departure_date=departure,
         return_date=returning,
         adults=adults,
@@ -227,7 +228,8 @@ async def watch_command(
         )
         return ConversationHandler.END
     try:
-        pending = parse_watch_command(context.args, settings)
+        args = command_arguments(update.message.text, context.args)
+        pending = parse_watch_command(args, settings)
     except ValueError as exc:
         await update.message.reply_text(
             f"Invalid watch: {exc}\n\n"

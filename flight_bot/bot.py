@@ -5,7 +5,7 @@ import logging
 import re
 import secrets
 from dataclasses import asdict, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from telegram import (
     BotCommand,
@@ -38,7 +38,7 @@ from .airports import (
 from .command_input import command_arguments
 from .formatting import format_results, selected_results
 from .links import expedia_search_url, google_flights_url, kayak_search_url
-from .models import Cabin, FlightOption, Priority, SearchRequest
+from .models import Cabin, DepartureWindow, FlightOption, Priority, SearchRequest
 from .ranking import itinerary_risks, rank_flights
 from .routestack import FlightSearchError, RouteStackClient
 from .watch_store import UserProfile, WatchStore
@@ -50,6 +50,7 @@ from .watching import (
     run_watch_cycle,
     unwatch_command,
     usage_command,
+    watch_date_callback,
     watch_command,
     watches_command,
 )
@@ -64,6 +65,12 @@ logger = logging.getLogger(__name__)
     RETURN,
     PASSENGERS,
     CABIN,
+    CURRENCY,
+    TIME_PREF,
+    MAX_STOPS,
+    RED_EYE,
+    CONNECTION,
+    DURATION_LIMIT,
     FLEXIBLE,
     FLEX_DAYS,
     NEARBY,
@@ -73,11 +80,15 @@ logger = logging.getLogger(__name__)
     BUDGET,
     PRIORITY,
     CONFIRM,
-) = range(16)
+) = range(22)
 
 
 def _keyboard(*rows: tuple[str, ...]) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
+
+
+def _default_choice(label: str, selected: bool) -> str:
+    return f"{label} (default)" if selected else label
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -111,6 +122,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/profile — saved airline, budget, and layover preferences\n\n"
         "For a one-line request:\n"
         "/flight JFK LAX 2026-09-15\n\n"
+        "Natural-language shortcut (uses saved/default preferences):\n"
+        "/quick New York to Paris on October 10, 2026 for 8 days\n\n"
         "For cities with spaces:\n"
         "/flight New York, NY | Los Angeles, CA | 2026-09-15\n\n"
         "Smart defaults: round trip returning after 7 nights, 4 adults, economy, "
@@ -120,6 +133,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "--trip one-way --adults 2 --cabin business --flex no --nearby yes "
         "--bags 1 --carry-on 1 --prefer DL,UA --avoid NK,F9 --budget 1200 "
         "--priority balanced --max-layover 240 --flex-days 3\n\n"
+        "Comfort overrides: --currency USD --time morning --max-stops 1 "
+        "--red-eye avoid --min-layover 60 --max-duration 24h. These helpers "
+        "rank and warn locally; they do not make extra provider calls.\n\n"
+        "RouteStack does not currently document dependable search inputs for "
+        "children/infants, multi-city, seat maps, or complete fare rules, so the "
+        "bot does not pretend those are supported. Verify fare rules and seats "
+        "during checkout.\n\n"
         "Smart progressive search tries one suggested date first, expands to "
         "±3 days only when needed, then checks eligible domestic nearby airports "
         "only if results remain missing or risky. The confirmation always shows "
@@ -139,6 +159,9 @@ async def defaults_command(
         "• Nearby airports: on domestic, off international\n"
         "• Baggage: 2 checked + 1 carry-on per traveler\n"
         "• Optional Smart checked-bag mode: 0 domestic, 2 international\n"
+        "• USD and any departure time / number of stops\n"
+        "• Avoid red-eyes; standard 1–5 hour connections\n"
+        "• No maximum itinerary duration\n"
         "• Balanced ranking\n\n"
         "Before searching, choose smart progressive search, the free suggested-date "
         "estimate, or the full live ±3-day comparison. Risky itineraries remain "
@@ -151,6 +174,7 @@ BOT_COMMANDS = (
     BotCommand("start", "Open the flight assistant"),
     BotCommand("search", "Start a guided flight search"),
     BotCommand("flight", "Search in one line: JFK LAX 2026-09-15"),
+    BotCommand("quick", "Natural request: New York to Paris..."),
     BotCommand("watch", "Create a recurring price alert"),
     BotCommand("watches", "List active price watches"),
     BotCommand("history", "Show observed watch prices"),
@@ -248,7 +272,41 @@ async def on_startup(application: Application) -> None:
 
 
 async def begin_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["trip"] = {}
+    context.user_data["trip"] = {
+        "adults": 4,
+        "cabin": Cabin.ECONOMY,
+        "currency": context.application.bot_data["settings"].default_currency,
+        "checked_bags": 2,
+        "carry_on_bags": 1,
+        "departure_window": DepartureWindow.ANY,
+        "avoid_red_eye": True,
+        "max_stops": None,
+        "min_layover_minutes": 60,
+        "max_layover_minutes": 300,
+        "max_total_duration_minutes": None,
+    }
+    store: WatchStore | None = context.application.bot_data.get("watch_store")
+    if store and update.effective_user:
+        try:
+            profile = await store.get_profile(update.effective_user.id)
+            context.user_data["trip"].update(
+                adults=profile.adults,
+                cabin=profile.cabin,
+                currency=profile.currency,
+                checked_bags=profile.checked_bags,
+                carry_on_bags=profile.carry_on_bags,
+                departure_window=profile.departure_window,
+                avoid_red_eye=profile.avoid_red_eye,
+                max_stops=profile.max_stops,
+                min_layover_minutes=profile.min_layover_minutes,
+                max_layover_minutes=profile.max_layover_minutes,
+                max_total_duration_minutes=profile.max_total_duration_minutes,
+                preferred_airlines=set(profile.preferred_airlines),
+                avoided_airlines=set(profile.avoided_airlines),
+                max_budget=profile.max_budget,
+            )
+        except Exception:
+            logger.exception("Could not load guided-search profile defaults")
     await update.message.reply_text(
         "Where are you departing from? Send a city, airport, or 3-letter code.",
         reply_markup=ReplyKeyboardRemove(),
@@ -297,6 +355,12 @@ def parse_flight_command(args: list[str]) -> dict:
         "max_budget": None,
         "priority": Priority.BALANCED,
         "max_layover_minutes": 300,
+        "min_layover_minutes": 60,
+        "departure_window": DepartureWindow.ANY,
+        "avoid_red_eye": True,
+        "max_stops": None,
+        "max_total_duration_minutes": None,
+        "currency": "USD",
     }
     value_options = {
         "--return",
@@ -314,6 +378,12 @@ def parse_flight_command(args: list[str]) -> dict:
         "--budget",
         "--priority",
         "--max-layover",
+        "--min-layover",
+        "--time",
+        "--red-eye",
+        "--max-stops",
+        "--max-duration",
+        "--currency",
     }
     index = 3
     while index < len(args):
@@ -437,6 +507,42 @@ def parse_flight_command(args: list[str]) -> dict:
             if not 60 <= minutes <= 720:
                 raise ValueError("--max-layover must be 60 to 720 minutes")
             trip["max_layover_minutes"] = minutes
+        elif option == "--min-layover":
+            minutes = int(value)
+            if not 30 <= minutes <= 180:
+                raise ValueError("--min-layover must be 30 to 180 minutes")
+            trip["min_layover_minutes"] = minutes
+        elif option == "--time":
+            try:
+                trip["departure_window"] = DepartureWindow(value.lower())
+            except ValueError as exc:
+                raise ValueError("--time must be any, morning, afternoon, or evening") from exc
+        elif option == "--red-eye":
+            normalized = value.lower()
+            if normalized not in {"avoid", "allow"}:
+                raise ValueError("--red-eye must be avoid or allow")
+            trip["avoid_red_eye"] = normalized == "avoid"
+        elif option == "--max-stops":
+            if value.lower() in {"any", "none"}:
+                trip["max_stops"] = None
+            else:
+                stops = int(value)
+                if stops not in {0, 1, 2}:
+                    raise ValueError("--max-stops must be 0, 1, 2, or any")
+                trip["max_stops"] = stops
+        elif option == "--max-duration":
+            if value.lower() in {"any", "none"}:
+                trip["max_total_duration_minutes"] = None
+            else:
+                hours = int(value.lower().replace("h", ""))
+                if not 4 <= hours <= 72:
+                    raise ValueError("--max-duration must be 4h to 72h or any")
+                trip["max_total_duration_minutes"] = hours * 60
+        elif option == "--currency":
+            currency = value.upper()
+            if currency not in {"USD", "CAD", "EUR", "GBP", "INR"}:
+                raise ValueError("--currency must be USD, CAD, EUR, GBP, or INR")
+            trip["currency"] = currency
         index += 2
     return trip
 
@@ -467,6 +573,21 @@ async def _apply_saved_profile(
         trip["max_budget"] = profile.max_budget
     if not _profile_option_present(args, "--max-layover"):
         trip["max_layover_minutes"] = profile.max_layover_minutes
+    mappings = {
+        "--adults": ("adults", profile.adults),
+        "--cabin": ("cabin", profile.cabin),
+        "--bags": ("checked_bags", profile.checked_bags),
+        "--carry-on": ("carry_on_bags", profile.carry_on_bags),
+        "--currency": ("currency", profile.currency),
+        "--time": ("departure_window", profile.departure_window),
+        "--red-eye": ("avoid_red_eye", profile.avoid_red_eye),
+        "--max-stops": ("max_stops", profile.max_stops),
+        "--min-layover": ("min_layover_minutes", profile.min_layover_minutes),
+        "--max-duration": ("max_total_duration_minutes", profile.max_total_duration_minutes),
+    }
+    for option, (key, value) in mappings.items():
+        if not _profile_option_present(args, option):
+            trip[key] = value
 
 
 async def flight_command(
@@ -475,6 +596,8 @@ async def flight_command(
     try:
         args = command_arguments(update.message.text, context.args)
         trip = parse_flight_command(args)
+        if not _profile_option_present(args, "--currency"):
+            trip["currency"] = context.application.bot_data["settings"].default_currency
         await _apply_saved_profile(
             context,
             update.effective_user.id if update.effective_user else None,
@@ -489,6 +612,57 @@ async def flight_command(
             "This defaults to a 7-night round trip, 4 adults, economy, flexible "
             "dates, domestic-only nearby airports, 2 checked bags, and 1 carry-on."
         )
+        return ConversationHandler.END
+    context.user_data["trip"] = trip
+    return await show_confirmation(update, context)
+
+
+def parse_quick_request(text: str) -> list[str]:
+    """Parse a deliberately small, transparent natural-language grammar."""
+    pattern = re.compile(
+        r"^\s*(?P<origin>.+?)\s+to\s+(?P<destination>.+?)\s+"
+        r"(?:on\s+)?(?P<date>\d{4}-\d{2}-\d{2}|[A-Za-z]+\s+\d{1,2},?\s+\d{4})"
+        r"(?:\s+for\s+(?P<days>\d+)\s+(?:days?|nights?))?"
+        r"(?:\s+(?P<oneway>one[- ]way))?\s*$",
+        re.I,
+    )
+    match = pattern.match(text)
+    if not match:
+        raise ValueError(
+            "use: /quick New York to Paris on October 10, 2026 for 8 days"
+        )
+    raw_date = match.group("date")
+    parsed: date | None = None
+    for date_format in ("%Y-%m-%d", "%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y"):
+        try:
+            parsed = datetime.strptime(raw_date, date_format).date()
+            break
+        except ValueError:
+            continue
+    if parsed is None or parsed < date.today():
+        raise ValueError("the travel date must be today or later")
+    args = [match.group("origin"), match.group("destination"), parsed.isoformat()]
+    if match.group("oneway"):
+        args.extend(["--trip", "one-way"])
+    elif match.group("days"):
+        args.extend(["--nights", match.group("days")])
+    return args
+
+
+async def quick_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    raw = update.message.text.partition(" ")[2]
+    try:
+        args = parse_quick_request(raw)
+        trip = parse_flight_command(args)
+        trip["currency"] = context.application.bot_data["settings"].default_currency
+        await _apply_saved_profile(
+            context,
+            update.effective_user.id if update.effective_user else None,
+            trip,
+            args,
+        )
+    except ValueError as exc:
+        await update.message.reply_text(f"I couldn't parse that trip: {exc}")
         return ConversationHandler.END
     context.user_data["trip"] = trip
     return await show_confirmation(update, context)
@@ -658,7 +832,7 @@ async def calendar_callback(
     await query.edit_message_text(f"Start date selected: {parsed:%A, %B %d, %Y}")
     await query.message.reply_text(
         "Is this one-way or round trip?",
-        reply_markup=_keyboard(("One-way", "Round trip")),
+        reply_markup=_keyboard(("One-way", "Round trip (default)")),
     )
     return TRIP_TYPE
 
@@ -681,31 +855,32 @@ async def departure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["trip"]["departure_date"] = parsed
     await update.message.reply_text(
         "Is this one-way or round trip?",
-        reply_markup=_keyboard(("One-way", "Round trip")),
+        reply_markup=_keyboard(("One-way", "Round trip (default)")),
     )
     return TRIP_TYPE
 
 
-async def _ask_passengers(message) -> int:
+async def _ask_passengers(message, context: ContextTypes.DEFAULT_TYPE) -> int:
+    selected = int(context.user_data["trip"].get("adults", 4))
     await message.reply_text(
-        "How many adult passengers? Default is 4.",
+        f"How many adult passengers? Your selected default is {selected}.",
         reply_markup=_keyboard(
-            ("1", "2", "3"),
-            ("4 (default)", "5", "6"),
-            ("7", "8", "9"),
+            tuple(_default_choice(str(value), value == selected) for value in (1, 2, 3)),
+            tuple(_default_choice(str(value), value == selected) for value in (4, 5, 6)),
+            tuple(_default_choice(str(value), value == selected) for value in (7, 8, 9)),
         ),
     )
     return PASSENGERS
 
 
 async def trip_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    answer = update.message.text.strip().lower()
+    answer = re.sub(r"\s*\(default\)$", "", update.message.text.strip(), flags=re.I).lower()
     if answer not in {"one-way", "one way", "round trip", "round-trip"}:
         await update.message.reply_text("Choose One-way or Round trip.")
         return TRIP_TYPE
     if answer.startswith("one"):
         context.user_data["trip"]["return_date"] = None
-        return await _ask_passengers(update.message)
+        return await _ask_passengers(update.message, context)
     await update.message.reply_text(
         "How long is the round trip? Choose the number of days after departure "
         "to return. Default is 7 days.",
@@ -727,7 +902,7 @@ async def return_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text("Choose a trip duration from 1 to 365 days.")
         return RETURN
     context.user_data["trip"]["return_date"] = departing + timedelta(days=duration)
-    return await _ask_passengers(update.message)
+    return await _ask_passengers(update.message, context)
 
 
 async def passengers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -737,17 +912,19 @@ async def passengers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Enter a number from 1 to 9.")
         return PASSENGERS
     context.user_data["trip"]["adults"] = count
+    default_cabin = context.user_data["trip"].get("cabin", Cabin.ECONOMY)
     await update.message.reply_text(
         "Cabin class?",
         reply_markup=_keyboard(
-            ("Economy", "Premium economy"), ("Business", "First")
+            (_default_choice("Economy", default_cabin == Cabin.ECONOMY), _default_choice("Premium economy", default_cabin == Cabin.PREMIUM_ECONOMY)),
+            (_default_choice("Business", default_cabin == Cabin.BUSINESS), _default_choice("First", default_cabin == Cabin.FIRST)),
         ),
     )
     return CABIN
 
 
 async def cabin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    value = update.message.text.strip().lower().replace(" ", "_")
+    value = re.sub(r"\s*\(default\)$", "", update.message.text.strip(), flags=re.I).lower().replace(" ", "_")
     mapping = {
         "economy": Cabin.ECONOMY,
         "premium_economy": Cabin.PREMIUM_ECONOMY,
@@ -758,15 +935,141 @@ async def cabin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Choose one of the cabin options.")
         return CABIN
     context.user_data["trip"]["cabin"] = mapping[value]
+    default_currency = context.user_data["trip"].get("currency", "USD")
     await update.message.reply_text(
-        "Are your travel dates flexible?",
-        reply_markup=_keyboard(("Yes", "No")),
+        "Display currency? This changes the currency requested from the provider; "
+        "it does not perform a local exchange-rate estimate.",
+        reply_markup=_keyboard(
+            tuple(_default_choice(item, item == default_currency) for item in ("USD", "CAD", "EUR")),
+            tuple(_default_choice(item, item == default_currency) for item in ("GBP", "INR")),
+        ),
+    )
+    return CURRENCY
+
+
+async def currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    value = re.sub(r"\s*\(default\)$", "", update.message.text.strip(), flags=re.I).upper()
+    if value not in {"USD", "CAD", "EUR", "GBP", "INR"}:
+        await update.message.reply_text("Choose USD, CAD, EUR, GBP, or INR.")
+        return CURRENCY
+    context.user_data["trip"]["currency"] = value
+    default_window = context.user_data["trip"].get("departure_window", DepartureWindow.ANY)
+    await update.message.reply_text(
+        "Preferred outbound departure time? Any time finds the widest selection. "
+        "Other choices remain preferences: mismatches stay visible with a warning.",
+        reply_markup=_keyboard(
+            (_default_choice("Any time", default_window == DepartureWindow.ANY),),
+            tuple(_default_choice(label, default_window.value == label.lower()) for label in ("Morning", "Afternoon", "Evening")),
+        ),
+    )
+    return TIME_PREF
+
+
+async def time_preference(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    value = re.sub(r"\s*time|\s*\(default\)", "", update.message.text.strip(), flags=re.I).lower()
+    try:
+        context.user_data["trip"]["departure_window"] = DepartureWindow(value)
+    except ValueError:
+        await update.message.reply_text("Choose Any time, Morning, Afternoon, or Evening.")
+        return TIME_PREF
+    default_stops = context.user_data["trip"].get("max_stops")
+    await update.message.reply_text(
+        "Maximum stops? Any keeps every fare. Options above your preference remain "
+        "visible but are highlighted and ranked lower.",
+        reply_markup=_keyboard(
+            (_default_choice("Any stops", default_stops is None),),
+            (_default_choice("Nonstop only", default_stops == 0), _default_choice("Maximum 1", default_stops == 1), _default_choice("Maximum 2", default_stops == 2)),
+        ),
+    )
+    return MAX_STOPS
+
+
+async def max_stops(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    answer = update.message.text.strip().lower()
+    if answer.startswith("any"):
+        value = None
+    elif answer.startswith("nonstop"):
+        value = 0
+    else:
+        match = re.search(r"\d+", answer)
+        value = int(match.group()) if match else -1
+        if value not in {1, 2}:
+            await update.message.reply_text("Choose Any stops, Nonstop only, Maximum 1, or Maximum 2.")
+            return MAX_STOPS
+    context.user_data["trip"]["max_stops"] = value
+    avoid_default = context.user_data["trip"].get("avoid_red_eye", True)
+    await update.message.reply_text(
+        "Red-eye preference? Avoid is the comfort-focused default. Red-eye fares "
+        "still appear, but receive a clear warning and ranking penalty.",
+        reply_markup=_keyboard((_default_choice("Avoid red-eyes", avoid_default), _default_choice("Allow red-eyes", not avoid_default))),
+    )
+    return RED_EYE
+
+
+async def red_eye(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    answer = update.message.text.strip().lower()
+    if not answer.startswith(("avoid", "allow")):
+        await update.message.reply_text("Choose Avoid red-eyes or Allow red-eyes.")
+        return RED_EYE
+    context.user_data["trip"]["avoid_red_eye"] = answer.startswith("avoid")
+    connection_default = (
+        context.user_data["trip"].get("min_layover_minutes", 60),
+        context.user_data["trip"].get("max_layover_minutes", 300),
+    )
+    await update.message.reply_text(
+        "Connection comfort? Standard allows 1–5 hour layovers. Short accepts "
+        "45 minutes; Comfortable asks for at least 90 minutes; Wide allows up to 8 hours.",
+        reply_markup=_keyboard(
+            (_default_choice("Standard 1–5h", connection_default == (60, 300)),),
+            (_default_choice("Short 45m–3h", connection_default == (45, 180)), _default_choice("Comfortable 90m–6h", connection_default == (90, 360))),
+            (_default_choice("Wide 45m–8h", connection_default == (45, 480)),),
+        ),
+    )
+    return CONNECTION
+
+
+async def connection_preference(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    answer = update.message.text.strip().lower()
+    presets = {"standard": (60, 300), "short": (45, 180), "comfortable": (90, 360), "wide": (45, 480)}
+    selected = next((value for label, value in presets.items() if answer.startswith(label)), None)
+    if not selected:
+        await update.message.reply_text("Choose one of the connection presets.")
+        return CONNECTION
+    context.user_data["trip"]["min_layover_minutes"], context.user_data["trip"]["max_layover_minutes"] = selected
+    duration_default = context.user_data["trip"].get("max_total_duration_minutes")
+    await update.message.reply_text(
+        "Maximum travel time per direction? No limit keeps all results. Longer "
+        "options remain visible but are highlighted and ranked lower.",
+        reply_markup=_keyboard(
+            (_default_choice("No duration limit", duration_default is None),),
+            tuple(_default_choice(f"{hours} hours", duration_default == hours * 60) for hours in (12, 18, 24)),
+            (_default_choice("36 hours", duration_default == 2160),),
+        ),
+    )
+    return DURATION_LIMIT
+
+
+async def duration_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    answer = update.message.text.strip().lower()
+    if answer.startswith("no"):
+        value = None
+    else:
+        match = re.search(r"\d+", answer)
+        value = int(match.group()) * 60 if match else -1
+        if value not in {720, 1080, 1440, 2160}:
+            await update.message.reply_text("Choose No limit, 12, 18, 24, or 36 hours.")
+            return DURATION_LIMIT
+    context.user_data["trip"]["max_total_duration_minutes"] = value
+    await update.message.reply_text(
+        "Are your travel dates flexible? Yes can reveal cheaper travel days; no "
+        "keeps the exact date.",
+        reply_markup=_keyboard(("Yes (default)", "No")),
     )
     return FLEXIBLE
 
 
 async def flexible(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    answer = update.message.text.strip().lower()
+    answer = update.message.text.strip().lower().split(" ", 1)[0]
     if answer not in {"yes", "no"}:
         await update.message.reply_text("Please choose Yes or No.")
         return FLEXIBLE
@@ -816,11 +1119,12 @@ async def nearby(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         await update.message.reply_text("Choose Auto, Yes, or No.")
         return NEARBY
+    default_bags = context.user_data["trip"].get("checked_bags", 2)
     await update.message.reply_text(
-        "How many checked/check-in bags per traveler? Default is 2. Smart uses "
+        f"How many checked/check-in bags per traveler? Your selected default is {default_bags}. Smart uses "
         "0 domestically or 2 internationally.",
         reply_markup=_keyboard(
-            ("0 checked", "1 checked", "2 checked (default)"),
+            tuple(_default_choice(f"{value} checked", value == default_bags) for value in (0, 1, 2)),
             ("Smart by route",),
         ),
     )
@@ -839,9 +1143,13 @@ async def bags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return BAGS
         context.user_data["trip"]["checked_bags"] = count
         context.user_data["trip"]["auto_baggage"] = False
+    default_carry = context.user_data["trip"].get("carry_on_bags", 1)
     await update.message.reply_text(
-        "How many carry-on bags per traveler? Default is 1.",
-        reply_markup=_keyboard(("0 carry-on", "1 carry-on (default)", "2 carry-ons")),
+        f"How many carry-on bags per traveler? Your selected default is {default_carry}.",
+        reply_markup=_keyboard(tuple(
+            _default_choice(f"{value} carry-on{'s' if value != 1 else ''}", value == default_carry)
+            for value in (0, 1, 2)
+        )),
     )
     return CARRY_ON
 
@@ -853,11 +1161,13 @@ async def carry_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Choose 0, 1, or 2 carry-on bags.")
         return CARRY_ON
     context.user_data["trip"]["carry_on_bags"] = count
+    trip = context.user_data["trip"]
+    has_saved = bool(trip.get("preferred_airlines") or trip.get("avoided_airlines"))
     await update.message.reply_text(
         "Airline preferences? Use IATA codes like:\n"
         "prefer: DL,UA; avoid: F9,NK\n\n"
-        "Or choose None.",
-        reply_markup=_keyboard(("None",)),
+        "The default keeps your saved profile, or no restrictions if none are saved.",
+        reply_markup=_keyboard((("Use saved (default)" if has_saved else "None (default)"),)),
     )
     return AIRLINES
 
@@ -884,7 +1194,14 @@ def _parse_airlines(text: str) -> tuple[set[str], set[str]] | None:
 
 
 async def airlines(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    parsed = _parse_airlines(update.message.text)
+    answer = update.message.text.strip()
+    if answer.lower().startswith("use saved"):
+        parsed = (
+            set(context.user_data["trip"].get("preferred_airlines", set())),
+            set(context.user_data["trip"].get("avoided_airlines", set())),
+        )
+    else:
+        parsed = _parse_airlines(re.sub(r"\s*\(default\)$", "", answer, flags=re.I))
     if parsed is None:
         await update.message.reply_text(
             "Use “none” or this format: prefer: DL,UA; avoid: F9,NK"
@@ -894,7 +1211,7 @@ async def airlines(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["trip"]["preferred_airlines"] = preferred
     context.user_data["trip"]["avoided_airlines"] = avoided
     await update.message.reply_text(
-        "Maximum airfare budget in USD for everyone? These planning limits "
+        f"Maximum airfare budget in {context.user_data['trip'].get('currency', 'USD')} for everyone? These planning limits "
         "adjust for your route type, cabin, trip type, and passenger count. "
         "Optional baggage/seat fees may be extra.",
         reply_markup=_budget_keyboard(context.user_data["trip"]),
@@ -960,16 +1277,29 @@ def common_budget_values(trip: dict) -> tuple[int, ...]:
 
 
 def _budget_keyboard(trip: dict) -> ReplyKeyboardMarkup:
-    values = [f"${value:,}" for value in common_budget_values(trip)]
+    currency_code = trip.get("currency", "USD")
+    values = [f"{currency_code} {value:,}" for value in common_budget_values(trip)]
+    default_budget = trip.get("max_budget")
+    default_button = (
+        f"{currency_code} {default_budget:,.0f} (saved default)"
+        if default_budget is not None
+        else "No maximum (default)"
+    )
     return _keyboard(
         tuple(values[:2]),
         tuple(values[2:]),
-        ("Custom amount", "No maximum"),
+        ("Custom amount", default_button),
     )
 
 
 async def budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    answer = update.message.text.strip().lower().replace("$", "").replace(",", "")
+    raw_answer = update.message.text.strip()
+    if raw_answer.lower().endswith("(saved default)"):
+        value = context.user_data["trip"].get("max_budget")
+        context.user_data["trip"]["max_budget"] = value
+        return await _ask_priority(update.message)
+    answer = re.sub(r"\s*\(default\)$", "", raw_answer, flags=re.I).lower()
+    answer = re.sub(r"^(usd|cad|eur|gbp|inr)\s+", "", answer).replace("$", "").replace(",", "")
     if answer == "custom amount":
         await update.message.reply_text(
             "Enter your custom maximum airfare budget in USD for all travelers, "
@@ -988,21 +1318,25 @@ async def budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await update.message.reply_text("Send a positive number or “none”.")
             return BUDGET
     context.user_data["trip"]["max_budget"] = value
-    await update.message.reply_text(
+    return await _ask_priority(update.message)
+
+
+async def _ask_priority(message) -> int:
+    await message.reply_text(
         "How should I sort the results?\n"
         "• Cheapest: puts price first\n"
         "• Balanced: best mix of price, duration, and stops\n"
         "• Fastest: puts total travel time first\n"
         "• Nonstop: strongly favors zero stops",
         reply_markup=_keyboard(
-            ("Cheapest", "Balanced"), ("Fastest", "Nonstop")
+            ("Cheapest", "Balanced (default)"), ("Fastest", "Nonstop")
         ),
     )
     return PRIORITY
 
 
 async def priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    answer = update.message.text.strip().lower()
+    answer = re.sub(r"\s*\(default\)$", "", update.message.text.strip(), flags=re.I).lower()
     try:
         selected = Priority(answer)
     except ValueError:
@@ -1020,7 +1354,7 @@ async def show_confirmation(
         trip["return_date"].isoformat() if trip["return_date"] else "one-way"
     )
     budget_text = (
-        f"${trip['max_budget']:,.2f}" if trip["max_budget"] else "no maximum"
+        f"{trip.get('currency', 'USD')} {trip['max_budget']:,.2f}" if trip["max_budget"] else "no maximum"
     )
     nearby_search_allowance = _nearby_search_allowance(trip)
     flexible_days_value = int(trip.get("flexible_days", 3))
@@ -1110,6 +1444,13 @@ async def show_confirmation(
         f"Nearby airports: {nearby_text} | "
         f"Baggage: {baggage_text}\n"
         f"Budget: {budget_text} | Ranking: {trip['priority'].value}\n\n"
+        f"Currency: {trip.get('currency', 'USD')} | Departure: "
+        f"{trip.get('departure_window', DepartureWindow.ANY).value} | "
+        f"Red-eyes: {'avoid' if trip.get('avoid_red_eye', True) else 'allow'} | "
+        f"Max stops: {trip.get('max_stops') if trip.get('max_stops') is not None else 'any'}\n"
+        f"Connections: {trip.get('min_layover_minutes', 60)}–"
+        f"{trip.get('max_layover_minutes', 300)} min | Max time/direction: "
+        f"{str(trip.get('max_total_duration_minutes') // 60) + 'h' if trip.get('max_total_duration_minutes') else 'none'}\n\n"
         f"{usage_label}: up to {maximum_provider_calls} "
         f"RouteStack search token(s).\n"
         f"{date_advice}\n"
@@ -1194,8 +1535,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Searching live fares and comparing the best options…",
         reply_markup=ReplyKeyboardRemove(),
     )
-    settings: Settings = context.application.bot_data["settings"]
-    request = SearchRequest(currency=settings.default_currency, **trip)
+    request = SearchRequest(**trip)
     client: RouteStackClient = context.application.bot_data["routestack"]
     try:
         if progressive:
@@ -1625,7 +1965,14 @@ def _profile_text(profile: UserProfile) -> str:
         f"Preferred airlines: {preferred}\n"
         f"Avoided airlines: {avoided}\n"
         f"Default budget: {budget}\n"
-        f"Maximum preferred layover: {profile.max_layover_minutes} minutes"
+        f"Travelers/cabin: {profile.adults} adult(s), {profile.cabin.value.replace('_', ' ').title()}\n"
+        f"Baggage: {profile.checked_bags} checked + {profile.carry_on_bags} carry-on\n"
+        f"Currency/time: {profile.currency}, {profile.departure_window.value}\n"
+        f"Red-eyes: {'avoid' if profile.avoid_red_eye else 'allow'} | "
+        f"Max stops: {profile.max_stops if profile.max_stops is not None else 'any'}\n"
+        f"Layover preference: {profile.min_layover_minutes}–{profile.max_layover_minutes} minutes\n"
+        f"Maximum duration: {profile.max_total_duration_minutes // 60 if profile.max_total_duration_minutes else 'none'}"
+        f"{' hours' if profile.max_total_duration_minutes else ''}"
     )
 
 
@@ -1646,7 +1993,9 @@ async def profile_command(
             _profile_text(current)
             + "\n\nUpdate example:\n"
             "/profile --prefer DL,UA --avoid NK,F9 --budget 900 "
-            "--max-layover 240\n"
+            "--adults 4 --cabin economy --bags 2 --carry-on 1 --currency USD "
+            "--time any --red-eye avoid --max-stops any --min-layover 60 "
+            "--max-layover 300 --max-duration none\n"
             "Use /profile --clear to restore defaults. This command uses no "
             "RouteStack search token."
         )
@@ -1661,14 +2010,22 @@ async def profile_command(
     avoided = set(current.avoided_airlines)
     budget = current.max_budget
     max_layover = current.max_layover_minutes
-    allowed = {"--prefer", "--avoid", "--budget", "--max-layover"}
+    values = {
+        "adults": current.adults, "cabin": current.cabin,
+        "checked_bags": current.checked_bags, "carry_on_bags": current.carry_on_bags,
+        "currency": current.currency, "departure_window": current.departure_window,
+        "avoid_red_eye": current.avoid_red_eye, "max_stops": current.max_stops,
+        "min_layover_minutes": current.min_layover_minutes,
+        "max_total_duration_minutes": current.max_total_duration_minutes,
+    }
+    allowed = {"--prefer", "--avoid", "--budget", "--max-layover", "--adults", "--cabin", "--bags", "--carry-on", "--currency", "--time", "--red-eye", "--max-stops", "--min-layover", "--max-duration"}
     index = 0
     try:
         while index < len(args):
             option = args[index].lower()
             if option not in allowed or index + 1 >= len(args):
                 raise ValueError(
-                    "use --prefer, --avoid, --budget, or --max-layover with a value"
+                    "use a documented /profile option with a value"
                 )
             value = args[index + 1]
             if option == "--prefer":
@@ -1682,10 +2039,37 @@ async def profile_command(
                     budget = float(value.replace("$", "").replace(",", ""))
                     if budget <= 0:
                         raise ValueError("--budget must be positive or none")
-            else:
+            elif option == "--max-layover":
                 max_layover = int(value)
                 if not 60 <= max_layover <= 720:
                     raise ValueError("--max-layover must be 60 to 720 minutes")
+            elif option == "--adults":
+                values["adults"] = int(value)
+                if not 1 <= values["adults"] <= 9: raise ValueError("--adults must be 1 to 9")
+            elif option == "--cabin":
+                values["cabin"] = Cabin(value.upper().replace("-", "_"))
+            elif option == "--bags":
+                values["checked_bags"] = int(value)
+                if values["checked_bags"] not in {0, 1, 2}: raise ValueError("--bags must be 0, 1, or 2")
+            elif option == "--carry-on":
+                values["carry_on_bags"] = int(value)
+                if values["carry_on_bags"] not in {0, 1, 2}: raise ValueError("--carry-on must be 0, 1, or 2")
+            elif option == "--currency":
+                values["currency"] = value.upper()
+                if values["currency"] not in {"USD", "CAD", "EUR", "GBP", "INR"}: raise ValueError("unsupported currency")
+            elif option == "--time":
+                values["departure_window"] = DepartureWindow(value.lower())
+            elif option == "--red-eye":
+                if value.lower() not in {"avoid", "allow"}: raise ValueError("--red-eye must be avoid or allow")
+                values["avoid_red_eye"] = value.lower() == "avoid"
+            elif option == "--max-stops":
+                values["max_stops"] = None if value.lower() in {"any", "none"} else int(value)
+                if values["max_stops"] not in {None, 0, 1, 2}: raise ValueError("--max-stops must be 0, 1, 2, or any")
+            elif option == "--min-layover":
+                values["min_layover_minutes"] = int(value)
+                if not 30 <= values["min_layover_minutes"] <= 180: raise ValueError("--min-layover must be 30 to 180")
+            else:
+                values["max_total_duration_minutes"] = None if value.lower() in {"none", "any"} else int(value.lower().replace("h", "")) * 60
             index += 2
     except (ValueError, IndexError) as exc:
         await update.message.reply_text(f"Invalid profile update: {exc}")
@@ -1697,7 +2081,7 @@ async def profile_command(
         return
     saved = await store.save_profile(
         user_id,
-        UserProfile(preferred, avoided, budget, max_layover),
+        UserProfile(preferred, avoided, budget, max_layover, **values),
     )
     await update.message.reply_text(
         _profile_text(saved)
@@ -1761,6 +2145,7 @@ def build_application(settings: Settings) -> Application:
         entry_points=[
             CommandHandler("search", begin_search),
             CommandHandler("flight", flight_command),
+            CommandHandler("quick", quick_command),
             CommandHandler("repeat", repeat_command),
         ],
         states={
@@ -1778,6 +2163,12 @@ def build_application(settings: Settings) -> Application:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, passengers)
             ],
             CABIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, cabin)],
+            CURRENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, currency)],
+            TIME_PREF: [MessageHandler(filters.TEXT & ~filters.COMMAND, time_preference)],
+            MAX_STOPS: [MessageHandler(filters.TEXT & ~filters.COMMAND, max_stops)],
+            RED_EYE: [MessageHandler(filters.TEXT & ~filters.COMMAND, red_eye)],
+            CONNECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, connection_preference)],
+            DURATION_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, duration_limit)],
             FLEXIBLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, flexible)],
             FLEX_DAYS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, flexible_days)
@@ -1824,6 +2215,9 @@ def build_application(settings: Settings) -> Application:
             checkout_callback,
             pattern=r"^checkout:[A-Za-z0-9_-]{8}:\d+$",
         )
+    )
+    application.add_handler(
+        CallbackQueryHandler(watch_date_callback, pattern=r"^watchdate:(switch|both|keep):")
     )
     application.add_handler(MessageHandler(filters.TEXT, unknown))
     application.add_error_handler(error_handler)

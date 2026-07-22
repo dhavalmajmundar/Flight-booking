@@ -39,7 +39,18 @@ def test_watch_safe_defaults_use_one_exact_search() -> None:
     assert pending.request.auto_baggage is False
     assert pending.interval_hours == 24
     assert pending.drop_percent == 5
+    assert pending.weekly_flex is False
     assert 60 < pending.maximum_checks <= 240
+
+
+def test_watch_can_enable_weekly_flexible_deep_scan() -> None:
+    pending = parse_watch_command(
+        ["JFK", "LAX", "2026-09-15", "--weekly-flex", "yes"],
+        settings(),
+        now=datetime(2026, 7, 19, tzinfo=timezone.utc),
+    )
+    assert pending.weekly_flex is True
+    assert pending.request.flexible_dates is False
 
 
 def test_watch_overrides_and_request_round_trip_serialization() -> None:

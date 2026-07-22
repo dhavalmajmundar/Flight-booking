@@ -20,6 +20,13 @@ class Priority(StrEnum):
     NONSTOP = "nonstop"
 
 
+class DepartureWindow(StrEnum):
+    ANY = "any"
+    MORNING = "morning"
+    AFTERNOON = "afternoon"
+    EVENING = "evening"
+
+
 @dataclass
 class SearchRequest:
     origin: str
@@ -40,6 +47,11 @@ class SearchRequest:
     priority: Priority = Priority.BALANCED
     currency: str = "USD"
     max_layover_minutes: int = 300
+    min_layover_minutes: int = 60
+    departure_window: DepartureWindow = DepartureWindow.ANY
+    avoid_red_eye: bool = True
+    max_stops: int | None = None
+    max_total_duration_minutes: int | None = None
     flexible_days: int = 3
 
     @property

@@ -29,6 +29,7 @@ from flight_bot.bot import (
     nearby,
     passengers,
     parse_flight_command,
+    parse_quick_request,
     return_date,
     suggested_departure_date,
 )
@@ -200,7 +201,7 @@ def test_custom_budget_button_requests_an_amount_without_advancing() -> None:
     keyboard = message.reply_text.await_args.kwargs["reply_markup"]
     assert [button.text for button in keyboard.keyboard[0]] == [
         "Cheapest",
-        "Balanced",
+        "Balanced (default)",
     ]
     assert [button.text for button in keyboard.keyboard[1]] == [
         "Fastest",
@@ -265,6 +266,7 @@ def test_startup_registers_telegram_slash_menu() -> None:
         "start",
         "search",
         "flight",
+        "quick",
         "watch",
         "watches",
         "history",
@@ -279,6 +281,19 @@ def test_startup_registers_telegram_slash_menu() -> None:
         "help",
         "cancel",
         "myid",
+    ]
+
+
+def test_quick_request_parses_city_names_date_and_duration() -> None:
+    args = parse_quick_request(
+        "New York, NY to Paris on October 10, 2026 for 8 days"
+    )
+    assert args == [
+        "New York, NY",
+        "Paris",
+        "2026-10-10",
+        "--nights",
+        "8",
     ]
 
 

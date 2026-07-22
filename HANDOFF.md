@@ -11,7 +11,7 @@ Last updated: 2026-07-22
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 45 automated tests passing
+- Verification: 48 automated tests passing
 
 ## User experience
 
@@ -19,9 +19,12 @@ Last updated: 2026-07-22
 - Guided search uses an inline month calendar for the start date and reply
   buttons for trip type, round-trip duration, 1–9 passengers, cabin, flexibility,
   ±1/2/3/5/7 flexible days, nearby-airport behavior, separate checked/carry-on
-  baggage, budget presets, skip choices, and ranking. Only origin/destination
-  normally require typing.
+  baggage, currency, departure window, maximum stops, red-eye policy, connection
+  comfort, maximum duration, budget presets, skip choices, and ranking. Each
+  screen marks the current safe or saved default.
 - `/flight ORIGIN DESTINATION YYYY-MM-DD` starts a one-line search.
+- `/quick New York to Paris on October 10, 2026 for 8 days` uses a bounded local
+  parser, saved defaults, and the normal confirmation; it consumes no AI tokens.
 - Multi-word cities, states, and airport names use pipe separators, for example
   `/flight New York, NY | Los Angeles, CA | 2026-09-15`. The same format works
   for `/watch`.
@@ -29,7 +32,7 @@ Last updated: 2026-07-22
 - `/watch` creates a persistent price alert after showing estimated maximum
   lifetime usage and requiring confirmation.
 - `/watches`, `/history`, `/checknow`, `/unwatch`, and `/usage` manage watches.
-- The bot registers all 17 owner commands with Telegram during startup so typing
+- The bot registers all 18 owner commands with Telegram during startup so typing
   `/` displays searches, watches, airport, history, profile, recent/repeat, and
   support helpers.
 - One-line defaults:
@@ -50,8 +53,8 @@ Last updated: 2026-07-22
   - Search only the suggested date
   - Compare all dates within the selected ±1 to ±7-day range
   - Cancel without making a fare call
-- The full comparison shows the cheapest live departure day and savings versus
-  the requested date.
+- The full comparison shows a green/yellow/red date-price calendar, cheapest live
+  departure day, and savings versus the requested date.
 - Results identify best overall, cheapest, fastest, and flexible-date options.
 - Up to three distinct results can be revalidated and opened in RouteStack's
   hosted checkout.
@@ -65,7 +68,9 @@ Last updated: 2026-07-22
   remain visible with prominent warnings and ranking penalties.
 - Guided city input presents local airport choices; `/airports` lists likely
   codes without a provider call.
-- `/profile` persists one-line airline, budget, and maximum-layover defaults.
+- `/profile` persists airline, budget, travelers, cabin, baggage, currency,
+  departure window, red-eye, stop, layover, and duration defaults for guided and
+  one-line searches.
   `/recent` and `/repeat` reuse successful searches but still require live-search
   confirmation.
 - Deal labels use only Postgres history observed by this bot for the resolved
@@ -76,8 +81,10 @@ Last updated: 2026-07-22
 - Budget buttons are generated locally from route type, cabin, one-way/round-trip,
   and passenger count. Domestic anchors reference BTS Q1 2026 ($428 average
   itinerary) and ARC December 2025 ($514 economy/$1,370 premium); international
-  values are deliberately wider planning bands. `Custom amount` waits for any
-  positive USD total. No RouteStack call is used to create budget choices.
+  values are deliberately wider planning bands. Buttons and custom amounts use
+  the selected currency. No RouteStack call is used to create budget choices.
+- Result cards add per-traveler prices, difference from cheapest, and cost per
+  hour saved for a faster, more expensive option.
 - Telegram never collects payment details or issues tickets.
 
 ## Security and ownership
@@ -101,7 +108,9 @@ Last updated: 2026-07-22
 - Scheduling conserves calls far from departure, becomes more frequent near
   departure or a target price, and prioritizes urgent due watches within the
   unchanged global daily cap.
-- Flexible dates and nearby airports are disabled for recurring checks.
+- Flexible dates and nearby airports are disabled for normal recurring checks.
+  `--weekly-flex yes` opts into a weekly ±3 scan only when seven calls remain
+  under the daily cap; it replaces that cycle's exact-date check.
 - Defaults: 5% drop alert, five active watches, 60-day maximum, and ten attempted
   watch searches per UTC day globally.
 - The first result establishes a baseline. Alerts trigger on target price,
@@ -114,6 +123,17 @@ Last updated: 2026-07-22
   checkout links or collect payment details.
 - Alerts disclose itinerary risks and quality regressions and separately identify
   newly affordable nonstop options.
+- Weekly scans offer Switch date, Watch both, or Keep current date when another
+  date is at least 5% cheaper. Alerts also identify recovery near an observed low
+  after a 10%+ rise.
+
+## Provider limitations
+
+- RouteStack's public schema does not currently document dependable inputs for
+  children/infants, multi-city itineraries, seat maps, or complete fare rules.
+  The bot deliberately avoids nonfunctional controls for them.
+- Verify exact baggage, change/cancellation rules, and seats during the
+  revalidated checkout handoff.
 
 ## API-usage safeguards
 

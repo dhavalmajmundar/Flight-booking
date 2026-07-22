@@ -4,7 +4,8 @@ A Telegram bot that collects trip preferences, asks for confirmation, then searc
 live RouteStack flight offers. It ranks results by price, travel time, stops, baggage,
 airline preferences, and the user's chosen priority.
 
-The bot does **not** search in the background and does **not** invent prices.
+The bot searches only on owner confirmation or through an owner-activated,
+token-capped price watch. It does **not** invent prices.
 
 ## Features
 
@@ -23,6 +24,8 @@ The bot does **not** search in the background and does **not** invent prices.
 - Daily watch-token cap, automatic pausing, price history, daily digests, weekly
   summaries, expiry reminders, and observed-history book/wait guidance
 - One-line `/flight` command with optional filters
+- Local `/quick New York to Paris on October 10, 2026 for 8 days` parser; it
+  uses no AI service or provider token and still requires confirmation
 - Smart progressive search that starts with one suggested date, expands to ±3
   days only when needed, and checks eligible domestic nearby airports last
 - Smart `/flight` defaults: 7-night round trip, four adults, economy, flexible
@@ -42,6 +45,11 @@ The bot does **not** search in the background and does **not** invent prices.
 - Optional nearby-airport comparison within roughly 100 km
 - Separate checked-bag and carry-on choices, airline avoidance, preset/custom
   budgets, and clearly explained ranking preferences
+- Button-selected currency, departure window, maximum stops, red-eye policy,
+  connection-comfort preset, and maximum-duration preferences. Mismatches remain
+  visible with warnings and ranking penalties instead of being hidden.
+- Per-traveler price, price delta from the cheapest option, and cost per hour
+  saved when a faster option costs more
 - Best overall, cheapest, fastest, and flexible-date picks
 - Prominent, non-blocking warnings and ranking penalties for self-transfers,
   airport changes, overnight connections, tight/long layovers, multiple stops,
@@ -124,7 +132,7 @@ Create a safe-default watch:
 Full example:
 
 ```text
-/watch JFK LAX 2026-09-15 --return 2026-09-22 --target 350 --drop 5 --every 24 --for-days 30 --cabin economy --prefer DL,UA
+/watch JFK LAX 2026-09-15 --return 2026-09-22 --target 350 --drop 5 --every 24 --for-days 30 --cabin economy --prefer DL,UA --weekly-flex yes
 ```
 
 Watch commands:
@@ -149,6 +157,13 @@ more than one RouteStack search token. The confirmation shows the maximum
 lifetime usage before activation. The global daily cap defaults to 10; remaining
 checks pause until the next UTC day when it is reached.
 
+`--weekly-flex yes` opts a watch into a weekly ±3-day deep scan. It uses up to
+seven tokens instead of that day's exact-date check and runs only when at least
+seven calls remain under the daily cap. If a date is at least 5% cheaper, buttons
+can switch the watch date, keep the original, or watch both. Switch resets the
+baseline; watch-both respects the active-watch cap. Alerts also recognize a price
+that recovers near its observed low after rising more than 10%.
+
 The first successful check sends a baseline. Later alerts are sent for a target
 price, a configured percentage reduction, or a new record low, without repeating
 the same alert price. Each observation is stored in Postgres. Daily digests,
@@ -161,6 +176,12 @@ For a minimal one-line search:
 
 ```text
 /flight JFK LAX 2026-09-15
+```
+
+Natural-language shortcut:
+
+```text
+/quick New York to Paris on October 10, 2026 for 8 days
 ```
 
 Airport codes are optional. For multi-word cities, states, or full airport names,

@@ -8,7 +8,7 @@ from typing import Any
 
 import asyncpg
 
-from .models import Cabin, Priority, SearchRequest
+from .models import Cabin, DepartureWindow, Priority, SearchRequest
 
 
 @dataclass
@@ -27,6 +27,8 @@ class Watch:
     last_alert_price: float | None = None
     active: bool = True
     expiry_reminded: bool = False
+    weekly_flex: bool = False
+    last_flex_check_at: datetime | None = None
 
     @property
     def short_id(self) -> str:
@@ -39,6 +41,16 @@ class UserProfile:
     avoided_airlines: set[str]
     max_budget: float | None
     max_layover_minutes: int
+    adults: int = 4
+    cabin: Cabin = Cabin.ECONOMY
+    checked_bags: int = 2
+    carry_on_bags: int = 1
+    currency: str = "USD"
+    departure_window: DepartureWindow = DepartureWindow.ANY
+    avoid_red_eye: bool = True
+    max_stops: int | None = None
+    min_layover_minutes: int = 60
+    max_total_duration_minutes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +87,11 @@ def request_to_json(request: SearchRequest) -> str:
         "priority": request.priority.value,
         "currency": request.currency,
         "max_layover_minutes": request.max_layover_minutes,
+        "min_layover_minutes": request.min_layover_minutes,
+        "departure_window": request.departure_window.value,
+        "avoid_red_eye": request.avoid_red_eye,
+        "max_stops": request.max_stops,
+        "max_total_duration_minutes": request.max_total_duration_minutes,
     }
     return json.dumps(payload, separators=(",", ":"))
 
@@ -89,10 +106,17 @@ def request_from_json(raw: str | dict[str, Any]) -> SearchRequest:
     )
     payload["cabin"] = Cabin(payload["cabin"])
     payload["priority"] = Priority(payload["priority"])
+    payload["departure_window"] = DepartureWindow(
+        payload.get("departure_window", "any")
+    )
     payload["preferred_airlines"] = set(payload.get("preferred_airlines", []))
     payload["avoided_airlines"] = set(payload.get("avoided_airlines", []))
     payload.setdefault("max_layover_minutes", 300)
     payload.setdefault("flexible_days", 3)
+    payload.setdefault("min_layover_minutes", 60)
+    payload.setdefault("avoid_red_eye", True)
+    payload.setdefault("max_stops", None)
+    payload.setdefault("max_total_duration_minutes", None)
     return SearchRequest(**payload)
 
 
@@ -127,6 +151,8 @@ class WatchStore:
                 );
                 CREATE INDEX IF NOT EXISTS flight_watches_due_idx
                     ON flight_watches (active, next_check_at);
+                ALTER TABLE flight_watches ADD COLUMN IF NOT EXISTS weekly_flex BOOLEAN NOT NULL DEFAULT FALSE;
+                ALTER TABLE flight_watches ADD COLUMN IF NOT EXISTS last_flex_check_at TIMESTAMPTZ;
 
                 CREATE TABLE IF NOT EXISTS watch_prices (
                     id BIGSERIAL PRIMARY KEY,
@@ -162,6 +188,16 @@ class WatchStore:
                     max_layover_minutes INTEGER NOT NULL DEFAULT 300,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS adults INTEGER NOT NULL DEFAULT 4;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS cabin TEXT NOT NULL DEFAULT 'ECONOMY';
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS checked_bags INTEGER NOT NULL DEFAULT 2;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS carry_on_bags INTEGER NOT NULL DEFAULT 1;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'USD';
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS departure_window TEXT NOT NULL DEFAULT 'any';
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS avoid_red_eye BOOLEAN NOT NULL DEFAULT TRUE;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS max_stops INTEGER;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS min_layover_minutes INTEGER NOT NULL DEFAULT 60;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS max_total_duration_minutes INTEGER;
 
                 CREATE TABLE IF NOT EXISTS recent_searches (
                     id BIGSERIAL PRIMARY KEY,
@@ -226,6 +262,8 @@ class WatchStore:
             ),
             active=row["active"],
             expiry_reminded=row["expiry_reminded"],
+            weekly_flex=bool(row["weekly_flex"]),
+            last_flex_check_at=row["last_flex_check_at"],
         )
 
     @staticmethod
@@ -247,15 +285,16 @@ class WatchStore:
         drop_percent: float,
         interval_hours: int,
         expires_at: datetime,
+        weekly_flex: bool = False,
     ) -> Watch:
         watch_id = uuid.uuid4()
         row = await self._require_pool().fetchrow(
             """
             INSERT INTO flight_watches (
                 id, user_id, request_json, target_price, drop_percent,
-                interval_hours, expires_at, next_check_at
+                interval_hours, expires_at, next_check_at, weekly_flex
             )
-            VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, NOW())
+            VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, NOW(), $8)
             RETURNING *
             """,
             watch_id,
@@ -265,6 +304,7 @@ class WatchStore:
             drop_percent,
             interval_hours,
             expires_at,
+            weekly_flex,
         )
         return self._watch(row)
 
@@ -344,6 +384,31 @@ class WatchStore:
             self._uuid(watch.id),
         )
         return result != "UPDATE 0"
+
+    async def mark_flex_checked(self, watch_id: str) -> None:
+        await self._require_pool().execute(
+            "UPDATE flight_watches SET last_flex_check_at=NOW() WHERE id=$1::uuid",
+            self._uuid(watch_id),
+        )
+
+    async def update_watch_request(
+        self, user_id: int, prefix: str, request: SearchRequest
+    ) -> Watch | None:
+        watch = await self.get_by_prefix(user_id, prefix)
+        if not watch:
+            return None
+        row = await self._require_pool().fetchrow(
+            """
+            UPDATE flight_watches SET request_json=$3::jsonb, next_check_at=NOW(),
+                last_price=NULL, record_low=NULL, last_alert_price=NULL,
+                last_flex_check_at=NULL
+            WHERE user_id=$1 AND id=$2::uuid AND active RETURNING *
+            """,
+            user_id,
+            self._uuid(watch.id),
+            request_to_json(request),
+        )
+        return self._watch(row) if row else None
 
     async def usage_today(self) -> int:
         value = await self._require_pool().fetchval(
@@ -526,6 +591,16 @@ class WatchStore:
                 else None
             ),
             max_layover_minutes=int(row["max_layover_minutes"]),
+            adults=int(row["adults"]),
+            cabin=Cabin(row["cabin"]),
+            checked_bags=int(row["checked_bags"]),
+            carry_on_bags=int(row["carry_on_bags"]),
+            currency=row["currency"],
+            departure_window=DepartureWindow(row["departure_window"]),
+            avoid_red_eye=bool(row["avoid_red_eye"]),
+            max_stops=(int(row["max_stops"]) if row["max_stops"] is not None else None),
+            min_layover_minutes=int(row["min_layover_minutes"]),
+            max_total_duration_minutes=(int(row["max_total_duration_minutes"]) if row["max_total_duration_minutes"] is not None else None),
         )
 
     async def save_profile(
@@ -535,13 +610,24 @@ class WatchStore:
             """
             INSERT INTO user_profiles (
                 user_id, preferred_airlines, avoided_airlines,
-                max_budget, max_layover_minutes
-            ) VALUES ($1, $2, $3, $4, $5)
+                max_budget, max_layover_minutes, adults, cabin, checked_bags,
+                carry_on_bags, currency, departure_window, avoid_red_eye,
+                max_stops, min_layover_minutes, max_total_duration_minutes
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             ON CONFLICT (user_id) DO UPDATE SET
                 preferred_airlines=EXCLUDED.preferred_airlines,
                 avoided_airlines=EXCLUDED.avoided_airlines,
                 max_budget=EXCLUDED.max_budget,
                 max_layover_minutes=EXCLUDED.max_layover_minutes,
+                adults=EXCLUDED.adults, cabin=EXCLUDED.cabin,
+                checked_bags=EXCLUDED.checked_bags,
+                carry_on_bags=EXCLUDED.carry_on_bags,
+                currency=EXCLUDED.currency,
+                departure_window=EXCLUDED.departure_window,
+                avoid_red_eye=EXCLUDED.avoid_red_eye,
+                max_stops=EXCLUDED.max_stops,
+                min_layover_minutes=EXCLUDED.min_layover_minutes,
+                max_total_duration_minutes=EXCLUDED.max_total_duration_minutes,
                 updated_at=NOW()
             """,
             user_id,
@@ -549,6 +635,16 @@ class WatchStore:
             sorted(profile.avoided_airlines),
             profile.max_budget,
             profile.max_layover_minutes,
+            profile.adults,
+            profile.cabin.value,
+            profile.checked_bags,
+            profile.carry_on_bags,
+            profile.currency,
+            profile.departure_window.value,
+            profile.avoid_red_eye,
+            profile.max_stops,
+            profile.min_layover_minutes,
+            profile.max_total_duration_minutes,
         )
         return profile
 

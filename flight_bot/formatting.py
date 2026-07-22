@@ -42,8 +42,10 @@ def _flexible_date_lines(
     ]
     for travel_date, option in results.lowest_by_date:
         marker = " 🏆" if option is cheapest else ""
+        ratio = option.total_price / cheapest.total_price
+        band = "🟢" if ratio <= 1.05 else "🟡" if ratio <= 1.15 else "🔴"
         lines.append(
-            f"{travel_date:%a %b %d}: {option.currency} "
+            f"{band} {travel_date:%a %b %d}: {option.currency} "
             f"{option.total_price:,.2f}{marker}"
         )
     lines.append(
@@ -161,10 +163,25 @@ def format_results(
             [
                 f"<b>Baggage:</b> {baggage}; {carry_on}",
                 f"<b>Total:</b> {option.currency} {option.total_price:,.2f}",
+                f"<b>Per traveler:</b> {option.currency} "
+                f"{option.total_price / request.adults:,.2f}",
                 f"<b>Source:</b> {option.source} live API",
                 f"<b>Why:</b> {_reason(option, results)}",
             ]
         )
+        price_delta = option.total_price - results.cheapest.total_price
+        time_saved = results.cheapest.duration_minutes - option.duration_minutes
+        if price_delta > 0.005:
+            lines.append(
+                f"<b>Price context:</b> {option.currency} {price_delta:,.2f} "
+                "more than the cheapest option"
+            )
+            if time_saved >= 30:
+                hourly = price_delta / (time_saved / 60)
+                lines.append(
+                    f"<b>Time tradeoff:</b> saves {minutes_text(time_saved)} for "
+                    f"about {option.currency} {hourly:,.2f} per hour saved"
+                )
         if observed_prices is not None:
             lines.append(
                 f"<b>Observed deal level:</b> "

@@ -4,7 +4,7 @@ import logging
 import math
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -32,6 +32,7 @@ class PendingWatch:
     interval_hours: int
     expires_at: datetime
     maximum_checks: int
+    weekly_flex: bool = False
 
 
 def _future_date(value: str, today: date | None = None) -> date:
@@ -70,6 +71,7 @@ def parse_watch_command(
     checked_bags = 2
     carry_on_bags = 1
     auto_baggage = False
+    weekly_flex = False
 
     allowed = {
         "--return",
@@ -84,6 +86,7 @@ def parse_watch_command(
         "--avoid",
         "--bags",
         "--carry-on",
+        "--weekly-flex",
     }
     index = 3
     while index < len(args):
@@ -174,6 +177,10 @@ def parse_watch_command(
                 raise ValueError("--carry-on must be 0, 1, or 2") from exc
             if carry_on_bags not in {0, 1, 2}:
                 raise ValueError("--carry-on must be 0, 1, or 2")
+        elif option == "--weekly-flex":
+            if value.lower() not in {"yes", "no"}:
+                raise ValueError("--weekly-flex must be yes or no")
+            weekly_flex = value.lower() == "yes"
         index += 2
 
     departure_cutoff = datetime.combine(
@@ -215,6 +222,7 @@ def parse_watch_command(
         interval_hours=interval_hours,
         expires_at=expires_at,
         maximum_checks=maximum_checks,
+        weekly_flex=weekly_flex,
     )
 
 
@@ -304,6 +312,7 @@ async def watch_command(
             "Example:\n"
             "/watch JFK LAX 2026-09-15 --return 2026-09-22 "
             "--target 350 --drop 5 --every 24 --for-days 30"
+            " --weekly-flex yes"
         )
         return ConversationHandler.END
     context.user_data["pending_watch"] = pending
@@ -323,8 +332,11 @@ async def watch_command(
         f"Alert target: {target}; drop threshold: {pending.drop_percent:g}%\n"
         f"Check every {pending.interval_hours}h; expires "
         f"{pending.expires_at:%Y-%m-%d}\n\n"
-        "Each check searches one exact route/date with flexible dates and nearby "
-        "airports off. It uses at most 1 RouteStack token. Estimated maximum: "
+        f"Weekly flexible-date deep scan: {'on (±3 days)' if pending.weekly_flex else 'off (default)'}\n\n"
+        "Each normal check searches one exact route/date with nearby airports off. "
+        "It uses at most 1 RouteStack token. An enabled weekly ±3-day scan uses "
+        "up to 7 tokens instead of that day's exact check, only when the daily cap "
+        "has room. Estimated normal-check maximum: "
         f"{pending.maximum_checks} token(s). Daily global cap applies. The scheduler "
         "automatically checks less often far from departure and prioritizes trips "
         "near departure or near their target price.\n\n"
@@ -356,6 +368,7 @@ async def activate_watch(
         pending.drop_percent,
         pending.interval_hours,
         pending.expires_at,
+        pending.weekly_flex,
     )
     await update.message.reply_text(
         f"Watch {watch.short_id} activated. Its baseline check is queued and "
@@ -390,6 +403,7 @@ async def watches_command(
             f"{watch.request.destination}, {watch.request.departure_date}, "
             f"last {price}, every {watch.interval_hours}h, "
             f"expires {watch.expires_at:%Y-%m-%d}"
+            f"; weekly ±3 scan {'on' if watch.weekly_flex else 'off'}"
         )
     await update.message.reply_text("\n".join(lines))
 
@@ -506,6 +520,12 @@ def _alert_reasons(watch: Watch, price: float) -> list[str]:
     if watch.record_low is None or price < watch.record_low:
         reasons.append("new record low")
     if (
+        watch.record_low is not None
+        and watch.last_price > watch.record_low * 1.10
+        and price <= watch.record_low * 1.03
+    ):
+        reasons.append("price recovered to within 3% of its observed low")
+    if (
         watch.last_alert_price is not None
         and abs(price - watch.last_alert_price) < 0.005
     ):
@@ -601,15 +621,36 @@ async def _check_watch(
     interval = adaptive_watch_interval_hours(watch)
     if not await store.claim(watch, interval):
         return
-    await store.increment_usage()
+    settings: Settings = application.bot_data["settings"]
+    now = datetime.now(timezone.utc)
+    flex_due = watch.weekly_flex and (
+        watch.last_flex_check_at is None
+        or watch.last_flex_check_at <= now - timedelta(days=7)
+    )
+    remaining = settings.watch_daily_token_cap - await store.usage_today()
+    run_flex = flex_due and remaining >= 7
+    for _ in range(7 if run_flex else 1):
+        await store.increment_usage()
     client: RouteStackClient = application.bot_data["routestack"]
     try:
-        offers, _, _ = await client.search(watch.request)
-        results = rank_flights(offers, watch.request)
+        search_request = replace(
+            watch.request,
+            flexible_dates=True,
+            flexible_days=3,
+        ) if run_flex else watch.request
+        offers, _, _ = await client.search(search_request)
+        results = rank_flights(offers, search_request)
         if not results:
             await store.record_failure(watch.id)
             return
-        option = results.cheapest
+        if run_flex:
+            await store.mark_flex_checked(watch.id)
+        exact = dict(results.lowest_by_date).get(watch.request.departure_date)
+        option = exact or results.cheapest
+        if run_flex and exact and results.cheapest_travel_date is not exact:
+            alternate = results.cheapest_travel_date
+            if alternate.total_price <= exact.total_price * 0.95:
+                await _send_flexible_date_offer(application, watch, exact, alternate)
         history = await store.recent_prices(watch.id, days=60)
         previous_observation = await store.latest_observation(watch.id)
         reasons = _alert_reasons(watch, option.total_price)
@@ -674,6 +715,83 @@ async def _check_watch(
         await store.record_failure(watch.id)
 
 
+async def _send_flexible_date_offer(
+    application, watch: Watch, exact: FlightOption, alternate: FlightOption
+) -> None:
+    alternate_date = alternate.legs[0].departure.date()
+    shift = alternate_date - watch.request.departure_date
+    alternate_return = watch.request.return_date + shift if watch.request.return_date else None
+    token = secrets.token_urlsafe(5)
+    handoffs = application.user_data[watch.user_id].setdefault("watch_date_handoffs", {})
+    handoffs[token] = {
+        "watch_id": watch.id,
+        "departure_date": alternate_date,
+        "return_date": alternate_return,
+    }
+    while len(handoffs) > 5:
+        handoffs.pop(next(iter(handoffs)))
+    savings = exact.total_price - alternate.total_price
+    await application.bot.send_message(
+        watch.user_id,
+        f"📅 Watch {watch.short_id} found a cheaper nearby travel date\n"
+        f"Current date {watch.request.departure_date}: {exact.currency} {exact.total_price:,.2f}\n"
+        f"Alternative {alternate_date}: {alternate.currency} {alternate.total_price:,.2f}\n"
+        f"Potential saving: {alternate.currency} {savings:,.2f}\n\n"
+        "Switch updates this watch and resets its price baseline. Watch both creates "
+        "a second exact-date watch and still respects the active-watch limit.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Switch date", callback_data=f"watchdate:switch:{token}"), InlineKeyboardButton("Watch both", callback_data=f"watchdate:both:{token}")],
+            [InlineKeyboardButton("Keep current date", callback_data=f"watchdate:keep:{token}")],
+        ]),
+    )
+
+
+async def watch_date_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        return
+    _, action, token = parts
+    user_id = update.effective_user.id
+    handoff = context.user_data.get("watch_date_handoffs", {}).pop(token, None)
+    store = _store(context.application)
+    if not handoff or not store:
+        await query.edit_message_text("That date suggestion expired. The watch was not changed.")
+        return
+    watch = await store.get_by_prefix(user_id, handoff["watch_id"].split("-", 1)[0])
+    if not watch:
+        await query.edit_message_text("That active watch was not found.")
+        return
+    if action == "keep":
+        await query.edit_message_text("Kept the current watch date. No search token was used.")
+        return
+    changed_request = replace(
+        watch.request,
+        departure_date=handoff["departure_date"],
+        return_date=handoff["return_date"],
+        flexible_dates=False,
+        flexible_days=0,
+    )
+    if action == "switch":
+        await store.update_watch_request(user_id, watch.short_id, changed_request)
+        await query.edit_message_text(
+            f"Watch {watch.short_id} switched to {changed_request.departure_date}; "
+            "its baseline reset and the next capped check is queued."
+        )
+        return
+    settings: Settings = context.application.bot_data["settings"]
+    if await store.count_active(user_id) >= settings.watch_max_active:
+        await query.edit_message_text("The active-watch limit is full; no second watch was created.")
+        return
+    created = await store.create_watch(
+        user_id, changed_request, watch.target_price, watch.drop_percent,
+        watch.interval_hours, watch.expires_at, watch.weekly_flex,
+    )
+    await query.edit_message_text(
+        f"Added watch {created.short_id} for {changed_request.departure_date}. "
+        "Its first capped check is queued."
+    )
 async def _send_digest_and_reminders(application, store: WatchStore) -> None:
     settings: Settings = application.bot_data["settings"]
     owner = settings.owner_telegram_user_id

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from .models import FlightOption, Priority, SearchRequest
+from .models import DepartureWindow, FlightOption, Priority, SearchRequest
 
 
 @dataclass(frozen=True)
@@ -110,6 +110,41 @@ def rank_flights(
         )
         if request.preferred_airlines.intersection(offer.airline_codes):
             score -= 0.08
+        max_leg_stops = max(leg.stops for leg in offer.legs)
+        if request.max_stops is not None and max_leg_stops > request.max_stops:
+            score += 0.30 * (max_leg_stops - request.max_stops)
+            offer.warnings.append(
+                f"A direction exceeds your maximum of {request.max_stops} stop(s)"
+            )
+        if (
+            request.max_total_duration_minutes is not None
+            and any(
+                leg.duration_minutes > request.max_total_duration_minutes
+                for leg in offer.legs
+            )
+        ):
+            score += 0.20
+            offer.warnings.append(
+                "A direction exceeds your preferred travel time of "
+                f"{request.max_total_duration_minutes // 60}h"
+            )
+        first_hour = offer.legs[0].departure.hour
+        windows = {
+            DepartureWindow.MORNING: range(5, 12),
+            DepartureWindow.AFTERNOON: range(12, 17),
+            DepartureWindow.EVENING: range(17, 22),
+        }
+        if request.departure_window in windows and first_hour not in windows[request.departure_window]:
+            score += 0.12
+            offer.warnings.append(
+                f"Departure is outside your {request.departure_window.value} preference"
+            )
+        is_red_eye = first_hour >= 22 or first_hour < 5 or any(
+            leg.arrival.hour < 6 for leg in offer.legs
+        )
+        if request.avoid_red_eye and is_red_eye:
+            score += 0.18
+            offer.warnings.append("Red-eye or overnight arrival conflicts with your preference")
         if request.checked_bags > 0:
             if offer.checked_bags is None:
                 score += 0.08
@@ -130,6 +165,11 @@ def rank_flights(
         risks = itinerary_risks(offer)
         for leg in offer.legs:
             for airport, minutes in leg.layovers:
+                if minutes < request.min_layover_minutes:
+                    risks.append(
+                        f"Connection at {airport} is below your "
+                        f"{request.min_layover_minutes}-minute minimum"
+                    )
                 if (
                     minutes > request.max_layover_minutes
                     and not any(

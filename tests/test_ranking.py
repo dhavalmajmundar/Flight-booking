@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from flight_bot.models import Cabin, FlightOption, Leg, Priority, SearchRequest
+from flight_bot.models import Cabin, DepartureWindow, FlightOption, Leg, Priority, SearchRequest
 from flight_bot.ranking import (
     has_major_itinerary_risk,
     observed_deal_label,
@@ -52,6 +52,23 @@ def test_special_categories_are_correct() -> None:
     assert result is not None
     assert result.cheapest is cheap
     assert result.fastest is fast
+
+
+def test_comfort_preferences_warn_and_penalize_without_filtering() -> None:
+    red_eye = option("red", 100, 500, 2)
+    red_eye.legs = (
+        Leg("JFK", "LAX", datetime(2026, 9, 15, 23), datetime(2026, 9, 16, 5), 500, 2),
+    )
+    normal = option("normal", 130, 360, 0)
+    search = request()
+    search.departure_window = DepartureWindow.MORNING
+    search.max_stops = 1
+    search.avoid_red_eye = True
+    result = rank_flights([red_eye, normal], search)
+    assert result is not None
+    assert red_eye in result.ordered
+    assert any("Red-eye" in warning for warning in red_eye.warnings)
+    assert any("maximum" in warning for warning in red_eye.warnings)
 
 
 def test_cheapest_priority_favors_price() -> None:

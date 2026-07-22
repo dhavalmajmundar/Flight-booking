@@ -29,6 +29,8 @@ class Watch:
     expiry_reminded: bool = False
     weekly_flex: bool = False
     last_flex_check_at: datetime | None = None
+    consecutive_failures: int = 0
+    booked: bool = False
 
     @property
     def short_id(self) -> str:
@@ -51,6 +53,9 @@ class UserProfile:
     max_stops: int | None = None
     min_layover_minutes: int = 60
     max_total_duration_minutes: int | None = None
+    timezone: str = "America/New_York"
+    quiet_start_hour: int = 22
+    quiet_end_hour: int = 7
 
 
 @dataclass(frozen=True)
@@ -153,6 +158,8 @@ class WatchStore:
                     ON flight_watches (active, next_check_at);
                 ALTER TABLE flight_watches ADD COLUMN IF NOT EXISTS weekly_flex BOOLEAN NOT NULL DEFAULT FALSE;
                 ALTER TABLE flight_watches ADD COLUMN IF NOT EXISTS last_flex_check_at TIMESTAMPTZ;
+                ALTER TABLE flight_watches ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE flight_watches ADD COLUMN IF NOT EXISTS booked BOOLEAN NOT NULL DEFAULT FALSE;
 
                 CREATE TABLE IF NOT EXISTS watch_prices (
                     id BIGSERIAL PRIMARY KEY,
@@ -167,6 +174,10 @@ class WatchStore:
                 );
                 CREATE INDEX IF NOT EXISTS watch_prices_history_idx
                     ON watch_prices (watch_id, checked_at DESC);
+                ALTER TABLE watch_prices ADD COLUMN IF NOT EXISTS departure_time TIMESTAMPTZ;
+                ALTER TABLE watch_prices ADD COLUMN IF NOT EXISTS arrival_time TIMESTAMPTZ;
+                ALTER TABLE watch_prices ADD COLUMN IF NOT EXISTS checked_bags INTEGER;
+                ALTER TABLE watch_prices ADD COLUMN IF NOT EXISTS itinerary_key TEXT;
 
                 CREATE TABLE IF NOT EXISTS watch_usage (
                     usage_date DATE PRIMARY KEY,
@@ -198,6 +209,9 @@ class WatchStore:
                 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS max_stops INTEGER;
                 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS min_layover_minutes INTEGER NOT NULL DEFAULT 60;
                 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS max_total_duration_minutes INTEGER;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York';
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS quiet_start_hour INTEGER NOT NULL DEFAULT 22;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS quiet_end_hour INTEGER NOT NULL DEFAULT 7;
 
                 CREATE TABLE IF NOT EXISTS recent_searches (
                     id BIGSERIAL PRIMARY KEY,
@@ -264,6 +278,8 @@ class WatchStore:
             expiry_reminded=row["expiry_reminded"],
             weekly_flex=bool(row["weekly_flex"]),
             last_flex_check_at=row["last_flex_check_at"],
+            consecutive_failures=int(row["consecutive_failures"]),
+            booked=bool(row["booked"]),
         )
 
     @staticmethod
@@ -276,6 +292,55 @@ class WatchStore:
             user_id,
         )
         return int(value or 0)
+
+    async def ping(self) -> bool:
+        return bool(await self._require_pool().fetchval("SELECT 1"))
+
+    async def last_success_at(self, user_id: int) -> datetime | None:
+        return await self._require_pool().fetchval(
+            """
+            SELECT MAX(wp.checked_at) FROM watch_prices wp
+            JOIN flight_watches fw ON fw.id=wp.watch_id WHERE fw.user_id=$1
+            """,
+            user_id,
+        )
+
+    async def find_duplicate(
+        self, user_id: int, request: SearchRequest
+    ) -> Watch | None:
+        for watch in await self.list_active(user_id):
+            candidate = watch.request
+            if (
+                candidate.origin.casefold() == request.origin.casefold()
+                and candidate.destination.casefold() == request.destination.casefold()
+                and candidate.departure_date == request.departure_date
+                and candidate.return_date == request.return_date
+                and candidate.adults == request.adults
+                and candidate.cabin == request.cabin
+            ):
+                return watch
+        return None
+
+    async def update_watch_settings(
+        self,
+        watch_id: str,
+        target_price: float | None,
+        drop_percent: float,
+        interval_hours: int,
+        expires_at: datetime,
+        weekly_flex: bool,
+    ) -> Watch:
+        row = await self._require_pool().fetchrow(
+            """
+            UPDATE flight_watches SET target_price=$2, drop_percent=$3,
+                interval_hours=$4, expires_at=$5, weekly_flex=$6,
+                next_check_at=NOW(), active=TRUE, booked=FALSE
+            WHERE id=$1::uuid RETURNING *
+            """,
+            self._uuid(watch_id), target_price, drop_percent, interval_hours,
+            expires_at, weekly_flex,
+        )
+        return self._watch(row)
 
     async def create_watch(
         self,
@@ -385,6 +450,12 @@ class WatchStore:
         )
         return result != "UPDATE 0"
 
+    async def defer_watch(self, watch_id: str, hours: int) -> None:
+        await self._require_pool().execute(
+            "UPDATE flight_watches SET next_check_at=NOW()+make_interval(hours=>$2::int) WHERE id=$1::uuid",
+            self._uuid(watch_id), max(1, hours),
+        )
+
     async def mark_flex_checked(self, watch_id: str) -> None:
         await self._require_pool().execute(
             "UPDATE flight_watches SET last_flex_check_at=NOW() WHERE id=$1::uuid",
@@ -446,6 +517,10 @@ class WatchStore:
         duration_minutes: int,
         stops: int,
         alerted: bool,
+        departure_time: datetime | None = None,
+        arrival_time: datetime | None = None,
+        checked_bags: int | None = None,
+        itinerary_key: str | None = None,
     ) -> None:
         pool = self._require_pool()
         async with pool.acquire() as connection:
@@ -454,8 +529,9 @@ class WatchStore:
                     """
                     INSERT INTO watch_prices (
                         watch_id, price, currency, airline,
-                        duration_minutes, stops
-                    ) VALUES ($1::uuid, $2, $3, $4, $5, $6)
+                        duration_minutes, stops, departure_time, arrival_time,
+                        checked_bags, itinerary_key
+                    ) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     """,
                     self._uuid(watch.id),
                     price,
@@ -463,6 +539,10 @@ class WatchStore:
                     airline,
                     duration_minutes,
                     stops,
+                    departure_time,
+                    arrival_time,
+                    checked_bags,
+                    itinerary_key,
                 )
                 await connection.execute(
                     """
@@ -470,7 +550,8 @@ class WatchStore:
                     SET last_checked_at=NOW(), last_price=$2,
                         record_low=LEAST(COALESCE(record_low, $2), $2),
                         last_alert_price=CASE WHEN $3 THEN $2
-                            ELSE last_alert_price END
+                            ELSE last_alert_price END,
+                        consecutive_failures=0
                     WHERE id=$1::uuid
                     """,
                     self._uuid(watch.id),
@@ -480,7 +561,7 @@ class WatchStore:
 
     async def record_failure(self, watch_id: str) -> None:
         await self._require_pool().execute(
-            "UPDATE flight_watches SET last_checked_at=NOW() WHERE id=$1::uuid",
+            "UPDATE flight_watches SET last_checked_at=NOW(), consecutive_failures=consecutive_failures+1 WHERE id=$1::uuid",
             self._uuid(watch_id),
         )
 
@@ -520,6 +601,18 @@ class WatchStore:
             ),
             int(row["stops"]) if row["stops"] is not None else None,
         )
+
+    async def latest_itinerary(self, watch_id: str) -> dict[str, Any] | None:
+        row = await self._require_pool().fetchrow(
+            """
+            SELECT airline, departure_time, arrival_time, checked_bags,
+                   itinerary_key, duration_minutes, stops
+            FROM watch_prices WHERE watch_id=$1::uuid
+            ORDER BY checked_at DESC LIMIT 1
+            """,
+            self._uuid(watch_id),
+        )
+        return dict(row) if row else None
 
     async def expiring_watches(self, user_id: int) -> list[Watch]:
         rows = await self._require_pool().fetch(
@@ -601,6 +694,9 @@ class WatchStore:
             max_stops=(int(row["max_stops"]) if row["max_stops"] is not None else None),
             min_layover_minutes=int(row["min_layover_minutes"]),
             max_total_duration_minutes=(int(row["max_total_duration_minutes"]) if row["max_total_duration_minutes"] is not None else None),
+            timezone=row["timezone"],
+            quiet_start_hour=int(row["quiet_start_hour"]),
+            quiet_end_hour=int(row["quiet_end_hour"]),
         )
 
     async def save_profile(
@@ -612,8 +708,9 @@ class WatchStore:
                 user_id, preferred_airlines, avoided_airlines,
                 max_budget, max_layover_minutes, adults, cabin, checked_bags,
                 carry_on_bags, currency, departure_window, avoid_red_eye,
-                max_stops, min_layover_minutes, max_total_duration_minutes
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                max_stops, min_layover_minutes, max_total_duration_minutes,
+                timezone, quiet_start_hour, quiet_end_hour
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             ON CONFLICT (user_id) DO UPDATE SET
                 preferred_airlines=EXCLUDED.preferred_airlines,
                 avoided_airlines=EXCLUDED.avoided_airlines,
@@ -628,6 +725,9 @@ class WatchStore:
                 max_stops=EXCLUDED.max_stops,
                 min_layover_minutes=EXCLUDED.min_layover_minutes,
                 max_total_duration_minutes=EXCLUDED.max_total_duration_minutes,
+                timezone=EXCLUDED.timezone,
+                quiet_start_hour=EXCLUDED.quiet_start_hour,
+                quiet_end_hour=EXCLUDED.quiet_end_hour,
                 updated_at=NOW()
             """,
             user_id,
@@ -645,8 +745,54 @@ class WatchStore:
             profile.max_stops,
             profile.min_layover_minutes,
             profile.max_total_duration_minutes,
+            profile.timezone,
+            profile.quiet_start_hour,
+            profile.quiet_end_hour,
         )
         return profile
+
+    async def mark_booked(self, user_id: int, prefix: str) -> bool:
+        watch = await self.get_by_prefix(user_id, prefix)
+        if not watch:
+            return False
+        result = await self._require_pool().execute(
+            "UPDATE flight_watches SET active=FALSE, booked=TRUE WHERE id=$1::uuid",
+            self._uuid(watch.id),
+        )
+        return result != "UPDATE 0"
+
+    async def export_user_data(self, user_id: int) -> dict[str, Any]:
+        profile = await self.get_profile(user_id)
+        watches = await self._require_pool().fetch(
+            "SELECT * FROM flight_watches WHERE user_id=$1 ORDER BY created_at", user_id
+        )
+        prices = await self._require_pool().fetch(
+            """
+            SELECT wp.* FROM watch_prices wp JOIN flight_watches fw ON fw.id=wp.watch_id
+            WHERE fw.user_id=$1 ORDER BY wp.checked_at
+            """, user_id,
+        )
+        return {
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+            "profile": {
+                "preferred_airlines": sorted(profile.preferred_airlines),
+                "avoided_airlines": sorted(profile.avoided_airlines),
+                "max_budget": profile.max_budget,
+                "currency": profile.currency,
+                "timezone": profile.timezone,
+                "quiet_hours": [profile.quiet_start_hour, profile.quiet_end_hour],
+            },
+            "watches": [
+                {key: (value.isoformat() if isinstance(value, (date, datetime)) else str(value) if isinstance(value, uuid.UUID) else value)
+                 for key, value in dict(row).items()}
+                for row in watches
+            ],
+            "prices": [
+                {key: (value.isoformat() if isinstance(value, (date, datetime)) else str(value) if isinstance(value, uuid.UUID) else value)
+                 for key, value in dict(row).items()}
+                for row in prices
+            ],
+        }
 
     async def record_search(
         self,

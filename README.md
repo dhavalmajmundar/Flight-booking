@@ -123,6 +123,12 @@ Typing `/` shows the registered command menu after the deployment has restarted.
 
 ## Price watches
 
+Send `/watch` with no arguments for the recommended button-driven wizard. It
+collects route, date, trip type/duration, target, drop threshold, frequency,
+watch lifetime, and weekly flexible-scan preference. Every screen labels the
+safe default, no fare call occurs during setup, and saved traveler/cabin/baggage
+preferences are applied.
+
 Create a safe-default watch:
 
 ```text
@@ -142,6 +148,16 @@ Watch commands:
 - `/checknow WATCH_ID` queues one additional token-capped check.
 - `/unwatch WATCH_ID` stops a watch.
 - `/usage` shows today's watch-token attempts and the configured cap.
+- `/deals` ranks active watches using stored prices only.
+- `/chart WATCH_ID` shows a compact 60-day price trend without an external chart
+  service or RouteStack call.
+- `/booked WATCH_ID` marks a purchased trip and stops its watch. Alerts also
+  include a Mark booked button.
+- `/cleanup` suggests stale/unavailable watches without deleting automatically.
+- `/health` checks the database, scheduler, configuration, usage cap, and Railway
+  revision without performing a fare search.
+- `/export` privately downloads profile, watch, and price history as JSON; it
+  excludes credentials.
 
 Watch scheduling is urgency-aware while remaining inside the same global daily
 cap. It checks less often when departure is far away, then may increase frequency
@@ -149,6 +165,17 @@ near departure or when the observed fare approaches the target. Due watches
 closest to their targets and travel dates are considered first. Alerts keep
 cheaper risky itineraries visible, identify quality tradeoffs, and call out when
 an affordable nonstop becomes available.
+
+Duplicate route/date watches are detected during confirmation and can update the
+existing alert instead of occupying another slot. Stored itinerary fingerprints
+also detect airline, departure-time, and checked-bag changes even when the price
+does not materially change.
+
+The saved profile defaults to `America/New_York` with quiet hours from 22:00 to
+07:00. Change these with `/profile --timezone America/Chicago --quiet 23-7`.
+Nonurgent checks are deferred before spending a token; departures within three
+days and watches within 5% of target remain urgent. `/usage` includes a projected
+daily/weekly call budget, while actual calls always remain under the hard cap.
 
 Safe defaults are one exact route/date search every 24 hours, a 5% meaningful
 drop threshold, at most five active watches, and at most 60 days. Flexible dates

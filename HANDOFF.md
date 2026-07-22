@@ -11,7 +11,7 @@ Last updated: 2026-07-22
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 48 automated tests passing
+- Verification: 50 automated tests passing
 
 ## User experience
 
@@ -29,10 +29,13 @@ Last updated: 2026-07-22
   `/flight New York, NY | Los Angeles, CA | 2026-09-15`. The same format works
   for `/watch`.
 - `/defaults` explains the smart defaults without using RouteStack.
-- `/watch` creates a persistent price alert after showing estimated maximum
-  lifetime usage and requiring confirmation.
-- `/watches`, `/history`, `/checknow`, `/unwatch`, and `/usage` manage watches.
-- The bot registers all 18 owner commands with Telegram during startup so typing
+- `/watch` with no arguments launches a button-driven wizard for route, date,
+  trip type/duration, target, drop threshold, interval, lifetime, and weekly
+  flexible scan. Defaults are visibly selected and no fare token is used during
+  setup. One-line `/watch` remains available.
+- `/watches`, `/history`, `/checknow`, `/unwatch`, `/usage`, `/deals`, `/chart`,
+  `/booked`, `/cleanup`, `/health`, and `/export` manage watches and operations.
+- The bot registers all 24 owner commands with Telegram during startup so typing
   `/` displays searches, watches, airport, history, profile, recent/repeat, and
   support helpers.
 - One-line defaults:
@@ -104,6 +107,8 @@ Last updated: 2026-07-22
 ## Persistent price watches
 
 - Railway PostgreSQL is required through `DATABASE_URL`.
+- Duplicate route/date/traveler/cabin watches are detected before creation and
+  can update the existing watch's target, schedule, expiry, and weekly scan.
 - Watches default to one exact route/date search and a 24-hour base interval.
 - Scheduling conserves calls far from departure, becomes more frequent near
   departure or a target price, and prioritizes urgent due watches within the
@@ -123,9 +128,18 @@ Last updated: 2026-07-22
   checkout links or collect payment details.
 - Alerts disclose itinerary risks and quality regressions and separately identify
   newly affordable nonstop options.
+- Stored itinerary metadata detects airline, departure-time, checked-bag, stop,
+  and duration changes in addition to price changes.
 - Weekly scans offer Switch date, Watch both, or Keep current date when another
   date is at least 5% cheaper. Alerts also identify recovery near an observed low
   after a 10%+ rise.
+- Profile timezone and quiet hours default to `America/New_York`, 22:00–07:00.
+  Nonurgent checks are deferred before consuming a call; departures within three
+  days or prices within 5% of target remain urgent.
+- `/deals`, `/chart`, and the enhanced `/usage` operate entirely on stored data.
+  `/health` performs no fare search. `/export` provides owner-only JSON without
+  credentials. `/cleanup` suggests stale watches; nothing is removed without an
+  explicit `/unwatch` or `/booked` action.
 
 ## Provider limitations
 

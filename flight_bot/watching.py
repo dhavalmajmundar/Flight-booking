@@ -4,10 +4,15 @@ import logging
 import math
 import re
 import secrets
+import json
+import os
+import httpx
+from io import BytesIO
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes, ConversationHandler
 
@@ -22,6 +27,15 @@ from .watch_store import Watch, WatchStore
 logger = logging.getLogger(__name__)
 
 WATCH_CONFIRM = 200
+(
+    WATCH_ORIGIN, WATCH_DESTINATION, WATCH_DEPARTURE, WATCH_TRIP,
+    WATCH_DURATION, WATCH_TARGET, WATCH_DROP, WATCH_INTERVAL,
+    WATCH_DAYS, WATCH_WEEKLY,
+) = range(201, 211)
+
+
+def _watch_keyboard(*rows: tuple[str, ...]) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
 
 
 @dataclass
@@ -297,14 +311,16 @@ async def watch_command(
             "Price watches are disabled until Railway Postgres supplies DATABASE_URL."
         )
         return ConversationHandler.END
-    if await store.count_active(update.effective_user.id) >= settings.watch_max_active:
+    args = command_arguments(update.message.text, context.args)
+    if not args:
+        context.user_data["watch_form"] = {}
         await update.message.reply_text(
-            f"You already have {settings.watch_max_active} active watches. "
-            "Use /watches and /unwatch first."
+            "Price-watch setup (no search token yet)\n\nWhere are you departing from? "
+            "Send a city, airport, or three-letter code.",
+            reply_markup=ReplyKeyboardRemove(),
         )
-        return ConversationHandler.END
+        return WATCH_ORIGIN
     try:
-        args = command_arguments(update.message.text, context.args)
         pending = parse_watch_command(args, settings)
     except ValueError as exc:
         await update.message.reply_text(
@@ -315,11 +331,28 @@ async def watch_command(
             " --weekly-flex yes"
         )
         return ConversationHandler.END
+    return await _show_watch_confirmation(update, context, pending)
+
+
+async def _show_watch_confirmation(update: Update, context, pending: PendingWatch) -> int:
+    store = _store(context.application)
+    duplicate = await store.find_duplicate(update.effective_user.id, pending.request) if store else None
+    settings: Settings = context.application.bot_data["settings"]
+    if not duplicate and store and await store.count_active(update.effective_user.id) >= settings.watch_max_active:
+        await update.message.reply_text(
+            f"You already have {settings.watch_max_active} active watches. Use /cleanup or /unwatch first."
+        )
+        return ConversationHandler.END
     context.user_data["pending_watch"] = pending
+    context.user_data["duplicate_watch_id"] = duplicate.id if duplicate else None
     target = (
         f"{pending.request.currency} {pending.target_price:,.2f}"
         if pending.target_price
         else "new record low"
+    )
+    duplicate_text = (
+        f"\nDuplicate detected: watch {duplicate.short_id}. Choose Update existing to change its alert settings without using another slot.\n"
+        if duplicate else ""
     )
     await update.message.reply_text(
         "Activate this price watch?\n"
@@ -340,9 +373,190 @@ async def watch_command(
         f"{pending.maximum_checks} token(s). Daily global cap applies. The scheduler "
         "automatically checks less often far from departure and prioritizes trips "
         "near departure or near their target price.\n\n"
-        "Send Activate watch or Cancel.",
+        f"{duplicate_text}\n"
+        + ("Choose Update existing or Cancel." if duplicate else "Choose Activate watch or Cancel."),
+        reply_markup=_watch_keyboard(
+            (("Update existing" if duplicate else "Activate watch"), "Cancel")
+        ),
     )
     return WATCH_CONFIRM
+
+
+async def watch_origin(update: Update, context) -> int:
+    context.user_data["watch_form"]["origin"] = update.message.text.strip()
+    await update.message.reply_text("Where are you flying to?")
+    return WATCH_DESTINATION
+
+
+async def watch_destination(update: Update, context) -> int:
+    context.user_data["watch_form"]["destination"] = update.message.text.strip()
+    await update.message.reply_text("Departure date? Send YYYY-MM-DD.")
+    return WATCH_DEPARTURE
+
+
+async def watch_departure(update: Update, context) -> int:
+    try:
+        departure = _future_date(update.message.text.strip())
+    except ValueError as exc:
+        await update.message.reply_text(f"Invalid date: {exc}. Send YYYY-MM-DD.")
+        return WATCH_DEPARTURE
+    context.user_data["watch_form"]["departure"] = departure
+    await update.message.reply_text(
+        "Trip type? Round trip is selected by default.",
+        reply_markup=_watch_keyboard(("Round trip (default)", "One-way")),
+    )
+    return WATCH_TRIP
+
+
+async def watch_trip(update: Update, context) -> int:
+    answer = update.message.text.strip().lower()
+    if answer.startswith("one"):
+        context.user_data["watch_form"]["one_way"] = True
+        return await _ask_watch_target(update, context)
+    if not answer.startswith("round"):
+        await update.message.reply_text("Choose Round trip or One-way.")
+        return WATCH_TRIP
+    context.user_data["watch_form"]["one_way"] = False
+    await update.message.reply_text(
+        "Trip duration? Seven days is selected by default.",
+        reply_markup=_watch_keyboard(("3 days", "5 days", "7 days (default)"), ("10 days", "14 days", "21 days")),
+    )
+    return WATCH_DURATION
+
+
+async def watch_duration(update: Update, context) -> int:
+    match = re.search(r"\d+", update.message.text)
+    days = int(match.group()) if match else 0
+    if not 1 <= days <= 365:
+        await update.message.reply_text("Choose a duration from 1 to 365 days.")
+        return WATCH_DURATION
+    context.user_data["watch_form"]["duration"] = days
+    return await _ask_watch_target(update, context)
+
+
+async def _ask_watch_target(update: Update, context) -> int:
+    currency = context.application.bot_data["settings"].default_currency
+    store = _store(context.application)
+    if store and update.effective_user:
+        currency = (await store.get_profile(update.effective_user.id)).currency
+    context.user_data["watch_form"]["currency"] = currency
+    await update.message.reply_text(
+        "Alert target for the total fare? No target alerts on meaningful drops and new lows. You can also type a custom positive amount.",
+        reply_markup=_watch_keyboard(("No target (default)",), (f"{currency} 500", f"{currency} 1000", f"{currency} 2000"), ("Custom amount",)),
+    )
+    return WATCH_TARGET
+
+
+async def watch_target(update: Update, context) -> int:
+    answer = update.message.text.strip()
+    if answer.lower() == "custom amount":
+        await update.message.reply_text("Type the custom total-fare target, for example 850.", reply_markup=ReplyKeyboardRemove())
+        return WATCH_TARGET
+    if answer.lower().startswith("no target"):
+        target = None
+    else:
+        match = re.search(r"[\d,.]+", answer)
+        try:
+            target = float(match.group().replace(",", "")) if match else -1
+        except ValueError:
+            target = -1
+        if target <= 0:
+            await update.message.reply_text("Choose No target or enter a positive amount.")
+            return WATCH_TARGET
+    context.user_data["watch_form"]["target"] = target
+    await update.message.reply_text(
+        "Meaningful-drop threshold? Five percent is the safe default.",
+        reply_markup=_watch_keyboard(("3%", "5% (default)", "10%", "15%")),
+    )
+    return WATCH_DROP
+
+
+async def watch_drop(update: Update, context) -> int:
+    match = re.search(r"\d+", update.message.text)
+    value = int(match.group()) if match else 0
+    if not 1 <= value <= 50:
+        await update.message.reply_text("Choose a percentage from 1 to 50.")
+        return WATCH_DROP
+    context.user_data["watch_form"]["drop"] = value
+    await update.message.reply_text(
+        "Base check frequency? The scheduler may safely adjust this for urgency. Every 24 hours is selected by default.",
+        reply_markup=_watch_keyboard(("Every 12h", "Every 24h (default)", "Every 48h")),
+    )
+    return WATCH_INTERVAL
+
+
+async def watch_interval(update: Update, context) -> int:
+    match = re.search(r"\d+", update.message.text)
+    value = int(match.group()) if match else 0
+    if value not in {6, 12, 24, 48}:
+        await update.message.reply_text("Choose 12, 24, or 48 hours.")
+        return WATCH_INTERVAL
+    context.user_data["watch_form"]["interval"] = value
+    settings: Settings = context.application.bot_data["settings"]
+    default_days = min(30, settings.watch_max_days)
+    choice_values = sorted({default_days, *(days for days in (7, 14, 30, 60) if days <= settings.watch_max_days)})
+    choices = tuple(f"{days} days" + (" (default)" if days == default_days else "") for days in choice_values)
+    await update.message.reply_text(
+        "How long should the watch remain active? It also stops automatically before departure.",
+        reply_markup=_watch_keyboard(choices),
+    )
+    return WATCH_DAYS
+
+
+async def watch_days(update: Update, context) -> int:
+    match = re.search(r"\d+", update.message.text)
+    value = int(match.group()) if match else 0
+    settings: Settings = context.application.bot_data["settings"]
+    if not 1 <= value <= settings.watch_max_days:
+        await update.message.reply_text(f"Choose 1 to {settings.watch_max_days} days.")
+        return WATCH_DAYS
+    context.user_data["watch_form"]["days"] = value
+    await update.message.reply_text(
+        "Weekly ±3-day deep scan? Off is selected by default. Turning it on may use up to seven capped calls once per week and can suggest a cheaper travel date.",
+        reply_markup=_watch_keyboard(("Off (default)", "On")),
+    )
+    return WATCH_WEEKLY
+
+
+async def watch_weekly(update: Update, context) -> int:
+    answer = update.message.text.strip().lower()
+    if not answer.startswith(("off", "on")):
+        await update.message.reply_text("Choose Off or On.")
+        return WATCH_WEEKLY
+    form = context.user_data.pop("watch_form")
+    args = [form["origin"], form["destination"], form["departure"].isoformat()]
+    if form.get("one_way"):
+        args += ["--trip", "one-way"]
+    else:
+        args += ["--return", (form["departure"] + timedelta(days=form.get("duration", 7))).isoformat()]
+    if form.get("target") is not None:
+        args += ["--target", str(form["target"])]
+    args += ["--drop", str(form["drop"]), "--every", str(form["interval"]), "--for-days", str(form["days"]), "--weekly-flex", "yes" if answer.startswith("on") else "no"]
+    try:
+        pending = parse_watch_command(args, context.application.bot_data["settings"])
+    except ValueError as exc:
+        await update.message.reply_text(f"Could not create that watch: {exc}")
+        return ConversationHandler.END
+    store = _store(context.application)
+    if store and update.effective_user:
+        profile = await store.get_profile(update.effective_user.id)
+        pending.request = replace(
+            pending.request,
+            adults=profile.adults,
+            cabin=profile.cabin,
+            checked_bags=profile.checked_bags,
+            carry_on_bags=profile.carry_on_bags,
+            preferred_airlines=set(profile.preferred_airlines),
+            avoided_airlines=set(profile.avoided_airlines),
+            currency=profile.currency,
+            departure_window=profile.departure_window,
+            avoid_red_eye=profile.avoid_red_eye,
+            max_stops=profile.max_stops,
+            min_layover_minutes=profile.min_layover_minutes,
+            max_layover_minutes=profile.max_layover_minutes,
+            max_total_duration_minutes=profile.max_total_duration_minutes,
+        )
+    return await _show_watch_confirmation(update, context, pending)
 
 
 async def activate_watch(
@@ -353,25 +567,39 @@ async def activate_watch(
         context.user_data.pop("pending_watch", None)
         await update.message.reply_text("Watch creation cancelled. No token was used.")
         return ConversationHandler.END
-    if answer != "activate watch":
-        await update.message.reply_text("Send Activate watch or Cancel.")
+    if answer not in {"activate watch", "update existing"}:
+        await update.message.reply_text("Choose the displayed activation option or Cancel.")
         return WATCH_CONFIRM
     pending: PendingWatch | None = context.user_data.pop("pending_watch", None)
     store = _store(context.application)
     if not pending or not store:
         await update.message.reply_text("That watch request expired. Use /watch again.")
         return ConversationHandler.END
-    watch = await store.create_watch(
-        update.effective_user.id,
-        pending.request,
-        pending.target_price,
-        pending.drop_percent,
-        pending.interval_hours,
-        pending.expires_at,
-        pending.weekly_flex,
-    )
+    duplicate_id = context.user_data.pop("duplicate_watch_id", None)
+    if duplicate_id and answer != "update existing":
+        await update.message.reply_text("A duplicate already exists. Choose Update existing or Cancel.")
+        context.user_data["pending_watch"] = pending
+        context.user_data["duplicate_watch_id"] = duplicate_id
+        return WATCH_CONFIRM
+    if not duplicate_id and answer == "update existing":
+        await update.message.reply_text("No existing duplicate was found. Choose Activate watch or Cancel.")
+        context.user_data["pending_watch"] = pending
+        return WATCH_CONFIRM
+    if answer == "update existing" and duplicate_id:
+        watch = await store.update_watch_settings(
+            duplicate_id, pending.target_price, pending.drop_percent,
+            pending.interval_hours, pending.expires_at, pending.weekly_flex,
+        )
+        action = "updated"
+    else:
+        watch = await store.create_watch(
+            update.effective_user.id, pending.request, pending.target_price,
+            pending.drop_percent, pending.interval_hours, pending.expires_at,
+            pending.weekly_flex,
+        )
+        action = "activated"
     await update.message.reply_text(
-        f"Watch {watch.short_id} activated. Its baseline check is queued and "
+        f"Watch {watch.short_id} {action}. Its baseline check is queued and "
         "will respect the daily token cap.\n"
         "Use /watches, /history "
         f"{watch.short_id}, /checknow {watch.short_id}, or "
@@ -493,11 +721,145 @@ async def usage_command(
         return
     used = await store.usage_today()
     active = await store.count_active(update.effective_user.id)
+    watches = await store.list_active(update.effective_user.id)
+    projected_daily = sum(24 / max(watch.interval_hours, 1) for watch in watches)
+    projected_weekly_flex = sum(6 for watch in watches if watch.weekly_flex)
+    projected_weekly = projected_daily * 7 + projected_weekly_flex
     await update.message.reply_text(
         f"Watch tokens attempted today: {used}/"
         f"{settings.watch_daily_token_cap}\n"
         f"Active watches: {active}/{settings.watch_max_active}\n"
+        f"Schedule forecast: about {projected_daily:.1f} normal call(s)/day and "
+        f"{projected_weekly:.0f} call(s)/week before adaptive scheduling/cache effects.\n"
+        "Weekly flexible scans add up to 6 calls beyond the exact-date call. "
         "Checks pause automatically when the daily cap is reached."
+    )
+
+
+async def deals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    store = _store(context.application)
+    if not store:
+        await update.message.reply_text("Deals require Railway Postgres.")
+        return
+    watches = await store.list_active(update.effective_user.id)
+    priced = [watch for watch in watches if watch.last_price is not None]
+    if not priced:
+        await update.message.reply_text("No active watch has a price baseline yet.")
+        return
+    def deal_key(watch: Watch):
+        target_ratio = watch.last_price / watch.target_price if watch.target_price else 9
+        low_ratio = watch.last_price / watch.record_low if watch.record_low else 9
+        return (min(target_ratio, low_ratio), (watch.request.departure_date - date.today()).days)
+    lines = ["🏷 Best stored watch deals (no search token used)"]
+    for rank, watch in enumerate(sorted(priced, key=deal_key), 1):
+        low_text = f"{(watch.last_price / watch.record_low - 1) * 100:+.1f}% vs low" if watch.record_low else "no low yet"
+        target_text = f"{(watch.last_price / watch.target_price - 1) * 100:+.1f}% vs target" if watch.target_price else "no target"
+        days = (watch.request.departure_date - date.today()).days
+        lines.append(f"{rank}. {watch.short_id} {watch.request.origin}→{watch.request.destination}: {watch.request.currency} {watch.last_price:,.2f} | {low_text} | {target_text} | {days} days")
+    await update.message.reply_text("\n".join(lines))
+
+
+def _sparkline(values: list[float]) -> str:
+    blocks = "▁▂▃▄▅▆▇█"
+    low, high = min(values), max(values)
+    if high <= low:
+        return blocks[3] * len(values)
+    return "".join(blocks[min(7, int((value - low) / (high - low) * 7))] for value in values)
+
+
+async def chart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Use /chart WATCH_ID")
+        return
+    store = _store(context.application)
+    watch = await store.get_by_prefix(update.effective_user.id, context.args[0]) if store else None
+    if not watch:
+        await update.message.reply_text("No matching active watch was found.")
+        return
+    history = await store.recent_prices(watch.id, days=60)
+    if not history:
+        await update.message.reply_text("No price history exists yet.")
+        return
+    values = [price for _, price in history[-30:]]
+    change = values[-1] - values[0]
+    await update.message.reply_text(
+        f"📊 {watch.short_id} price chart (oldest → newest)\n{_sparkline(values)}\n"
+        f"Low {watch.request.currency} {min(values):,.2f} | High {watch.request.currency} {max(values):,.2f}\n"
+        f"Latest {watch.request.currency} {values[-1]:,.2f} | Change {watch.request.currency} {change:+,.2f}\n"
+        "Built from Postgres history; no RouteStack token used."
+    )
+
+
+async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    store = _store(context.application)
+    db_ok = False
+    if store:
+        try:
+            db_ok = await store.ping()
+        except Exception:
+            logger.exception("Health database check failed")
+    jobs = context.application.job_queue.jobs() if context.application.job_queue else ()
+    settings: Settings = context.application.bot_data["settings"]
+    provider_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(
+                settings.routestack_base_url.rstrip("/") + "/mcp/docs/openapi.json"
+            )
+            provider_ok = response.status_code < 500
+    except httpx.HTTPError:
+        provider_ok = False
+    revision = os.getenv("RAILWAY_GIT_COMMIT_SHA", "local/unknown")[:12]
+    last_success = await store.last_success_at(update.effective_user.id) if db_ok else None
+    await update.message.reply_text(
+        "🩺 Owner health check (no fare search or search token used)\n"
+        f"Database: {'connected' if db_ok else 'unavailable'}\n"
+        f"RouteStack endpoint: {'reachable' if provider_ok else 'unreachable'}; credentials: {'configured' if context.application.bot_data.get('routestack') else 'missing'}\n"
+        f"Watch scheduler: {'running' if jobs else 'not scheduled'} ({len(jobs)} job(s))\n"
+        f"Last successful watch result: {last_success.strftime('%Y-%m-%d %H:%M UTC') if last_success else 'none recorded'}\n"
+        f"Daily cap: {await store.usage_today() if db_ok else 0}/{settings.watch_daily_token_cap}\n"
+        f"Deployment revision: {revision}"
+    )
+
+
+async def booked_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text("Use /booked WATCH_ID after purchasing the trip.")
+        return
+    store = _store(context.application)
+    marked = await store.mark_booked(update.effective_user.id, context.args[0]) if store else False
+    await update.message.reply_text("Watch marked booked and stopped." if marked else "No matching active watch was found.")
+
+
+async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    store = _store(context.application)
+    if not store:
+        await update.message.reply_text("Cleanup requires Railway Postgres.")
+        return
+    watches = await store.list_active(update.effective_user.id)
+    candidates = [watch for watch in watches if watch.consecutive_failures >= 3 or watch.request.departure_date <= date.today()]
+    if not candidates:
+        await update.message.reply_text("No stale watches need cleanup. Duplicate watches are prevented during creation.")
+        return
+    lines = ["🧹 Cleanup suggestions (nothing removed automatically)"]
+    for watch in candidates:
+        reason = "travel date reached" if watch.request.departure_date <= date.today() else f"{watch.consecutive_failures} consecutive unavailable checks"
+        lines.append(f"• {watch.short_id} {watch.request.origin}→{watch.request.destination}: {reason}")
+    lines.append("Use /unwatch WATCH_ID or /booked WATCH_ID.")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    store = _store(context.application)
+    if not store:
+        await update.message.reply_text("Export requires Railway Postgres.")
+        return
+    data = await store.export_user_data(update.effective_user.id)
+    payload = BytesIO(json.dumps(data, indent=2, ensure_ascii=False, default=str).encode("utf-8"))
+    payload.name = f"flight-bot-export-{date.today().isoformat()}.json"
+    await update.message.reply_document(
+        document=payload,
+        caption="Private owner export of profiles, watches, and observed prices. No credentials or RouteStack token used.",
     )
 
 
@@ -533,15 +895,14 @@ def _alert_reasons(watch: Watch, price: float) -> list[str]:
     return reasons
 
 
-def _watch_buttons(application, user_id: int, option: FlightOption, request: SearchRequest):
+def _watch_buttons(application, user_id: int, option: FlightOption, request: SearchRequest, watch_id: str | None = None):
     token = secrets.token_urlsafe(6)
     user_data = application.user_data[user_id]
     handoffs = user_data.setdefault("booking_handoffs", {})
     handoffs[token] = {"request": request, "options": [option]}
     while len(handoffs) > 3:
         handoffs.pop(next(iter(handoffs)))
-    return InlineKeyboardMarkup(
-        [
+    rows = [
             [
                 InlineKeyboardButton(
                     "Open exact fare",
@@ -565,7 +926,20 @@ def _watch_buttons(application, user_id: int, option: FlightOption, request: Sea
                 )
             ],
         ]
+    if watch_id:
+        rows.append([InlineKeyboardButton("Mark booked and stop", callback_data=f"booked:{watch_id.split('-', 1)[0]}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _itinerary_key(option: FlightOption) -> str:
+    return "|".join(
+        f"{leg.origin}-{leg.destination}-{leg.departure.isoformat()}-{leg.arrival.isoformat()}-{leg.stops}"
+        for leg in option.legs
     )
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 async def _send_watch_alert(
@@ -610,9 +984,19 @@ async def _send_watch_alert(
             "Prices can change. The exact link revalidates before checkout."
         ),
         reply_markup=_watch_buttons(
-            application, watch.user_id, option, watch.request
+            application, watch.user_id, option, watch.request, watch.id
         ),
     )
+
+
+async def booked_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    prefix = (query.data or "").partition(":")[2]
+    store = _store(context.application)
+    marked = await store.mark_booked(update.effective_user.id, prefix) if store else False
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text("Watch marked booked and stopped." if marked else "That watch is no longer active.")
 
 
 async def _check_watch(
@@ -653,7 +1037,21 @@ async def _check_watch(
                 await _send_flexible_date_offer(application, watch, exact, alternate)
         history = await store.recent_prices(watch.id, days=60)
         previous_observation = await store.latest_observation(watch.id)
+        previous_itinerary = await store.latest_itinerary(watch.id)
         reasons = _alert_reasons(watch, option.total_price)
+        current_airline = ", ".join(option.airlines)
+        if previous_itinerary:
+            previous_airline = previous_itinerary.get("airline")
+            if previous_airline and previous_airline != current_airline:
+                reasons.append(f"itinerary changed: airline {previous_airline} → {current_airline}")
+            previous_departure = previous_itinerary.get("departure_time")
+            if previous_departure:
+                shift_minutes = abs((_aware(option.legs[0].departure) - previous_departure).total_seconds()) / 60
+                if shift_minutes >= 60:
+                    reasons.append(f"itinerary changed: departure shifted {shift_minutes / 60:.1f} hours")
+            previous_bags = previous_itinerary.get("checked_bags")
+            if previous_bags is not None and option.checked_bags != previous_bags:
+                reasons.append(f"itinerary changed: checked bags {previous_bags} → {option.checked_bags if option.checked_bags is not None else 'unreported'}")
         if (
             previous_observation
             and previous_observation[2] is not None
@@ -706,6 +1104,10 @@ async def _check_watch(
             option.duration_minutes,
             option.stops,
             alert_sent,
+            _aware(option.legs[0].departure),
+            _aware(option.legs[-1].arrival),
+            option.checked_bags,
+            _itinerary_key(option),
         )
     except FlightSearchError as exc:
         logger.warning("Watch %s search failed: %s", watch.short_id, exc)
@@ -861,6 +1263,31 @@ async def _send_digest_and_reminders(application, store: WatchStore) -> None:
         await store.mark_notification(owner, "weekly_summary", today)
 
 
+def quiet_deferral_hours(profile, watch: Watch, now: datetime | None = None) -> int:
+    """Return hours to defer nonurgent work during the owner's quiet window."""
+    now = now or datetime.now(timezone.utc)
+    try:
+        local_now = now.astimezone(ZoneInfo(profile.timezone))
+    except ZoneInfoNotFoundError:
+        return 0
+    start, end = profile.quiet_start_hour, profile.quiet_end_hour
+    in_quiet = local_now.hour >= start or local_now.hour < end if start > end else start <= local_now.hour < end
+    urgent = (
+        (watch.request.departure_date - local_now.date()).days <= 3
+        or (
+            watch.target_price is not None
+            and watch.last_price is not None
+            and watch.last_price <= watch.target_price * 1.05
+        )
+    )
+    if not in_quiet or urgent:
+        return 0
+    target = local_now.replace(hour=end, minute=5, second=0, microsecond=0)
+    if target <= local_now:
+        target += timedelta(days=1)
+    return max(1, math.ceil((target - local_now).total_seconds() / 3600))
+
+
 async def run_watch_cycle(context: ContextTypes.DEFAULT_TYPE) -> None:
     application = context.application
     store = _store(application)
@@ -870,7 +1297,12 @@ async def run_watch_cycle(context: ContextTypes.DEFAULT_TYPE) -> None:
     await store.expire_old()
     due = await store.due_watches(limit=max(settings.watch_daily_token_cap, 25))
     due.sort(key=watch_urgency_key)
+    profile = await store.get_profile(settings.owner_telegram_user_id)
     for watch in due:
+        defer_hours = quiet_deferral_hours(profile, watch)
+        if defer_hours:
+            await store.defer_watch(watch.id, defer_hours)
+            continue
         if await store.usage_today() >= settings.watch_daily_token_cap:
             await store.postpone_due_until_tomorrow()
             today = datetime.now(timezone.utc).date()

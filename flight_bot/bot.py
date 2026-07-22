@@ -6,6 +6,7 @@ import re
 import secrets
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import (
     BotCommand,
@@ -44,14 +45,34 @@ from .routestack import FlightSearchError, RouteStackClient
 from .watch_store import UserProfile, WatchStore
 from .watching import (
     WATCH_CONFIRM,
+    WATCH_ORIGIN, WATCH_DESTINATION, WATCH_DEPARTURE, WATCH_TRIP,
+    WATCH_DURATION, WATCH_TARGET, WATCH_DROP, WATCH_INTERVAL,
+    WATCH_DAYS, WATCH_WEEKLY,
     activate_watch,
+    booked_callback,
+    booked_command,
+    chart_command,
     checknow_command,
+    cleanup_command,
+    deals_command,
+    export_command,
+    health_command,
     history_command,
     run_watch_cycle,
     unwatch_command,
     usage_command,
     watch_date_callback,
     watch_command,
+    watch_days,
+    watch_departure,
+    watch_destination,
+    watch_drop,
+    watch_duration,
+    watch_interval,
+    watch_origin,
+    watch_target,
+    watch_trip,
+    watch_weekly,
     watches_command,
 )
 
@@ -108,6 +129,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "No provider search happens until you confirm.\n\n"
         "Use /defaults to review the smart settings without making a search.\n\n"
         "Price-watch commands:\n"
+        "/watch — button-driven setup (recommended)\n"
         "/watch JFK LAX 2026-09-15 --return 2026-09-22 --target 350 "
         "--drop 5 --every 24 --for-days 30\n"
         "/watches — list alerts\n"
@@ -115,6 +137,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/checknow WATCH_ID — queue one token-capped check\n"
         "/unwatch WATCH_ID — stop an alert\n"
         "/usage — today's watch-token usage\n\n"
+        "/deals — rank active watches using stored prices\n"
+        "/chart WATCH_ID — no-token price trend\n"
+        "/booked WATCH_ID — mark purchased and stop\n"
+        "/cleanup — find stale watches\n"
+        "/health — owner-only service diagnostics\n"
+        "/export — private JSON backup\n\n"
         "Free helpers (no RouteStack search token):\n"
         "/airports New York, NY — local airport-code suggestions\n"
         "/recent — recent successful searches\n"
@@ -181,6 +209,12 @@ BOT_COMMANDS = (
     BotCommand("checknow", "Queue one watch check"),
     BotCommand("usage", "Show today's watch token usage"),
     BotCommand("unwatch", "Stop a price watch"),
+    BotCommand("deals", "Rank active stored deals"),
+    BotCommand("chart", "Show a watch price chart"),
+    BotCommand("booked", "Mark a watch purchased and stop it"),
+    BotCommand("cleanup", "Find stale watches"),
+    BotCommand("health", "Check bot and database health"),
+    BotCommand("export", "Export private watch data"),
     BotCommand("airports", "Find airport codes locally"),
     BotCommand("recent", "Show recent successful searches"),
     BotCommand("repeat", "Repeat a recent search"),
@@ -1972,7 +2006,9 @@ def _profile_text(profile: UserProfile) -> str:
         f"Max stops: {profile.max_stops if profile.max_stops is not None else 'any'}\n"
         f"Layover preference: {profile.min_layover_minutes}–{profile.max_layover_minutes} minutes\n"
         f"Maximum duration: {profile.max_total_duration_minutes // 60 if profile.max_total_duration_minutes else 'none'}"
-        f"{' hours' if profile.max_total_duration_minutes else ''}"
+        f"{' hours' if profile.max_total_duration_minutes else ''}\n"
+        f"Timezone/quiet hours: {profile.timezone}, "
+        f"{profile.quiet_start_hour:02d}:00–{profile.quiet_end_hour:02d}:00"
     )
 
 
@@ -1995,7 +2031,8 @@ async def profile_command(
             "/profile --prefer DL,UA --avoid NK,F9 --budget 900 "
             "--adults 4 --cabin economy --bags 2 --carry-on 1 --currency USD "
             "--time any --red-eye avoid --max-stops any --min-layover 60 "
-            "--max-layover 300 --max-duration none\n"
+            "--max-layover 300 --max-duration none "
+            "--timezone America/New_York --quiet 22-7\n"
             "Use /profile --clear to restore defaults. This command uses no "
             "RouteStack search token."
         )
@@ -2017,8 +2054,11 @@ async def profile_command(
         "avoid_red_eye": current.avoid_red_eye, "max_stops": current.max_stops,
         "min_layover_minutes": current.min_layover_minutes,
         "max_total_duration_minutes": current.max_total_duration_minutes,
+        "timezone": current.timezone,
+        "quiet_start_hour": current.quiet_start_hour,
+        "quiet_end_hour": current.quiet_end_hour,
     }
-    allowed = {"--prefer", "--avoid", "--budget", "--max-layover", "--adults", "--cabin", "--bags", "--carry-on", "--currency", "--time", "--red-eye", "--max-stops", "--min-layover", "--max-duration"}
+    allowed = {"--prefer", "--avoid", "--budget", "--max-layover", "--adults", "--cabin", "--bags", "--carry-on", "--currency", "--time", "--red-eye", "--max-stops", "--min-layover", "--max-duration", "--timezone", "--quiet"}
     index = 0
     try:
         while index < len(args):
@@ -2068,8 +2108,23 @@ async def profile_command(
             elif option == "--min-layover":
                 values["min_layover_minutes"] = int(value)
                 if not 30 <= values["min_layover_minutes"] <= 180: raise ValueError("--min-layover must be 30 to 180")
-            else:
+            elif option == "--max-duration":
                 values["max_total_duration_minutes"] = None if value.lower() in {"none", "any"} else int(value.lower().replace("h", "")) * 60
+            elif option == "--timezone":
+                try:
+                    ZoneInfo(value)
+                except ZoneInfoNotFoundError as exc:
+                    raise ValueError("--timezone must be an IANA name such as America/New_York") from exc
+                values["timezone"] = value
+            else:
+                quiet_match = re.fullmatch(r"(\d{1,2})-(\d{1,2})", value)
+                if not quiet_match:
+                    raise ValueError("--quiet must look like 22-7")
+                start_hour, end_hour = map(int, quiet_match.groups())
+                if not 0 <= start_hour <= 23 or not 0 <= end_hour <= 23 or start_hour == end_hour:
+                    raise ValueError("quiet hours must be different values from 0 to 23")
+                values["quiet_start_hour"] = start_hour
+                values["quiet_end_hour"] = end_hour
             index += 2
     except (ValueError, IndexError) as exc:
         await update.message.reply_text(f"Invalid profile update: {exc}")
@@ -2085,7 +2140,7 @@ async def profile_command(
     )
     await update.message.reply_text(
         _profile_text(saved)
-        + "\n\nThese defaults apply to /flight unless that command overrides them. "
+        + "\n\nThese defaults apply to guided search, /flight, /quick, and the guided /watch wizard unless explicitly overridden. "
         "No RouteStack search token was used."
     )
 
@@ -2093,6 +2148,8 @@ async def profile_command(
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("trip", None)
     context.user_data.pop("pending_watch", None)
+    context.user_data.pop("watch_form", None)
+    context.user_data.pop("duplicate_watch_id", None)
     await update.message.reply_text(
         "Search cancelled. No flight search was made.",
         reply_markup=ReplyKeyboardRemove(),
@@ -2187,6 +2244,16 @@ def build_application(settings: Settings) -> Application:
     watch_conversation = ConversationHandler(
         entry_points=[CommandHandler("watch", watch_command)],
         states={
+            WATCH_ORIGIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_origin)],
+            WATCH_DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_destination)],
+            WATCH_DEPARTURE: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_departure)],
+            WATCH_TRIP: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_trip)],
+            WATCH_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_duration)],
+            WATCH_TARGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_target)],
+            WATCH_DROP: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_drop)],
+            WATCH_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_interval)],
+            WATCH_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_days)],
+            WATCH_WEEKLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, watch_weekly)],
             WATCH_CONFIRM: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND, activate_watch
@@ -2205,6 +2272,12 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("checknow", checknow_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("unwatch", unwatch_command))
+    application.add_handler(CommandHandler("deals", deals_command))
+    application.add_handler(CommandHandler("chart", chart_command))
+    application.add_handler(CommandHandler("booked", booked_command))
+    application.add_handler(CommandHandler("cleanup", cleanup_command))
+    application.add_handler(CommandHandler("health", health_command))
+    application.add_handler(CommandHandler("export", export_command))
     application.add_handler(CommandHandler("airports", airports_command))
     application.add_handler(CommandHandler("recent", recent_command))
     application.add_handler(CommandHandler("profile", profile_command))
@@ -2218,6 +2291,9 @@ def build_application(settings: Settings) -> Application:
     )
     application.add_handler(
         CallbackQueryHandler(watch_date_callback, pattern=r"^watchdate:(switch|both|keep):")
+    )
+    application.add_handler(
+        CallbackQueryHandler(booked_callback, pattern=r"^booked:[0-9a-fA-F]{8}$")
     )
     application.add_handler(MessageHandler(filters.TEXT, unknown))
     application.add_error_handler(error_handler)

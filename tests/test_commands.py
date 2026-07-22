@@ -197,6 +197,15 @@ def test_custom_budget_button_requests_an_amount_without_advancing() -> None:
     message.text = "2750"
     assert asyncio.run(budget(update, context)) == PRIORITY
     assert context.user_data["trip"]["max_budget"] == 2750
+    keyboard = message.reply_text.await_args.kwargs["reply_markup"]
+    assert [button.text for button in keyboard.keyboard[0]] == [
+        "Cheapest",
+        "Balanced",
+    ]
+    assert [button.text for button in keyboard.keyboard[1]] == [
+        "Fastest",
+        "Nonstop",
+    ]
 
 
 def test_guided_round_trip_uses_duration_and_four_passenger_default_button() -> None:

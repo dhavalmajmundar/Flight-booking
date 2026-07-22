@@ -989,13 +989,13 @@ async def budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return BUDGET
     context.user_data["trip"]["max_budget"] = value
     await update.message.reply_text(
-        "How should I rank the results?\n"
-        "• Balanced: best mix of price, duration, and stops\n"
+        "How should I sort the results?\n"
         "• Cheapest: puts price first\n"
+        "• Balanced: best mix of price, duration, and stops\n"
         "• Fastest: puts total travel time first\n"
         "• Nonstop: strongly favors zero stops",
         reply_markup=_keyboard(
-            ("Balanced", "Cheapest"), ("Fastest", "Nonstop")
+            ("Cheapest", "Balanced"), ("Fastest", "Nonstop")
         ),
     )
     return PRIORITY

@@ -203,7 +203,8 @@ route/cabin/passenger-aware maximum budgets, a custom amount, or no maximum,
 and ranking priority. Nearby `Auto`
 means on for domestic trips and off for international trips.
 
-Ranking priority changes ordering, not which live fares are returned: `Balanced`
+Ranking choices are presented as `Cheapest`, `Balanced`, `Fastest`, and
+`Nonstop`. They change ordering, not which live fares are returned: `Balanced`
 uses price, duration, and stops; `Cheapest` emphasizes fare; `Fastest` emphasizes
 total travel time; and `Nonstop` strongly favors zero-stop itineraries. Safety
 warnings remain visible in every mode.

@@ -70,9 +70,9 @@ Last updated: 2026-07-22
   confirmation.
 - Deal labels use only Postgres history observed by this bot for the resolved
   route and currency.
-- Ranking choices are explained in the prompt: balanced price/time/stops,
-  cheapest-first, fastest-first, or strong nonstop preference. They reorder
-  offers without hiding safety warnings.
+- Ranking choices appear in this order: Cheapest, Balanced, Fastest, Nonstop.
+  The prompt explains price-first, balanced price/time/stops, fastest-first, and
+  strong nonstop preference. They reorder offers without hiding safety warnings.
 - Budget buttons are generated locally from route type, cabin, one-way/round-trip,
   and passenger count. Domestic anchors reference BTS Q1 2026 ($428 average
   itinerary) and ARC December 2025 ($514 economy/$1,370 premium); international

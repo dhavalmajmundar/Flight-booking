@@ -67,6 +67,9 @@ def parse_watch_command(
     duration_days = settings.watch_max_days
     preferred: set[str] = set()
     avoided: set[str] = set()
+    checked_bags = 2
+    carry_on_bags = 1
+    auto_baggage = False
 
     allowed = {
         "--return",
@@ -79,6 +82,8 @@ def parse_watch_command(
         "--cabin",
         "--prefer",
         "--avoid",
+        "--bags",
+        "--carry-on",
     }
     index = 3
     while index < len(args):
@@ -151,6 +156,24 @@ def parse_watch_command(
             preferred = _airline_codes(value)
         elif option == "--avoid":
             avoided = _airline_codes(value)
+        elif option == "--bags":
+            if value.lower() == "auto":
+                auto_baggage = True
+            else:
+                try:
+                    checked_bags = int(value)
+                except ValueError as exc:
+                    raise ValueError("--bags must be 0, 1, 2, or auto") from exc
+                if checked_bags not in {0, 1, 2}:
+                    raise ValueError("--bags must be 0, 1, 2, or auto")
+                auto_baggage = False
+        elif option == "--carry-on":
+            try:
+                carry_on_bags = int(value)
+            except ValueError as exc:
+                raise ValueError("--carry-on must be 0, 1, or 2") from exc
+            if carry_on_bags not in {0, 1, 2}:
+                raise ValueError("--carry-on must be 0, 1, or 2")
         index += 2
 
     departure_cutoff = datetime.combine(
@@ -176,9 +199,9 @@ def parse_watch_command(
         flexible_dates=False,
         flexible_days=0,
         nearby_airports=False,
-        checked_bags=0,
-        carry_on_bags=1,
-        auto_baggage=True,
+        checked_bags=checked_bags,
+        carry_on_bags=carry_on_bags,
+        auto_baggage=auto_baggage,
         auto_nearby=False,
         preferred_airlines=preferred,
         avoided_airlines=avoided,
@@ -294,6 +317,9 @@ async def watch_command(
         f"{pending.request.origin} → {pending.request.destination}\n"
         f"{pending.request.departure_date} → {pending.request.return_date}\n"
         f"{pending.request.adults} adult(s), {pending.request.cabin.value}\n"
+        f"Baggage: "
+        f"{'smart checked bags' if pending.request.auto_baggage else str(pending.request.checked_bags) + ' checked'}"
+        f" + {pending.request.carry_on_bags} carry-on per traveler\n"
         f"Alert target: {target}; drop threshold: {pending.drop_percent:g}%\n"
         f"Check every {pending.interval_hours}h; expires "
         f"{pending.expires_at:%Y-%m-%d}\n\n"

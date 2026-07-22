@@ -11,15 +11,16 @@ Last updated: 2026-07-22
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 41 automated tests passing
+- Verification: 43 automated tests passing
 
 ## User experience
 
 - `/search` starts the guided search.
 - Guided search uses an inline month calendar for the start date and reply
   buttons for trip type, round-trip duration, 1–9 passengers, cabin, flexibility,
-  ±1/2/3/5/7 flexible days, nearby-airport behavior, baggage, skip choices, and
-  priority. Only origin/destination normally require typing.
+  ±1/2/3/5/7 flexible days, nearby-airport behavior, separate checked/carry-on
+  baggage, budget presets, skip choices, and ranking. Only origin/destination
+  normally require typing.
 - `/flight ORIGIN DESTINATION YYYY-MM-DD` starts a one-line search.
 - Multi-word cities, states, and airport names use pipe separators, for example
   `/flight New York, NY | Los Angeles, CA | 2026-09-15`. The same format works
@@ -37,8 +38,9 @@ Last updated: 2026-07-22
   - Economy
   - Flexible dates within ±3 days; selectable from ±1 to ±7
   - Nearby airports enabled domestically and disabled internationally
-  - Domestic baggage: 0 checked bags and 1 carry-on
-  - International baggage: 2 checked bags and 1 carry-on
+  - Baggage: 2 checked bags and 1 carry-on per traveler
+  - Optional smart checked bags: 0 domestic or 2 international, while carry-on
+    remains independently selectable
   - Balanced ranking
 - Before any RouteStack fare call, the bot shows a free calendar estimate based
   on broad historical Monday–Wednesday travel trends.
@@ -68,6 +70,9 @@ Last updated: 2026-07-22
   confirmation.
 - Deal labels use only Postgres history observed by this bot for the resolved
   route and currency.
+- Ranking choices are explained in the prompt: balanced price/time/stops,
+  cheapest-first, fastest-first, or strong nonstop preference. They reorder
+  offers without hiding safety warnings.
 - Telegram never collects payment details or issues tickets.
 
 ## Security and ownership

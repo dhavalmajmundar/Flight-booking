@@ -238,10 +238,7 @@ class RouteStackClient:
         ) = destination_result
 
         if request.auto_baggage:
-            (
-                request.checked_bags,
-                request.carry_on_bags,
-            ) = smart_baggage(
+            request.checked_bags, _ = smart_baggage(
                 origin_country,
                 destination_country,
             )

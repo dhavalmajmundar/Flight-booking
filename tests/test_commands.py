@@ -8,6 +8,7 @@ from telegram.ext import ApplicationHandlerStop
 
 from flight_bot.bot import (
     BAGS,
+    CARRY_ON,
     BOT_COMMANDS,
     FLEX_DAYS,
     NEARBY,
@@ -17,6 +18,8 @@ from flight_bot.bot import (
     _progressive_search,
     access_gate,
     configure_bot_commands,
+    bags,
+    carry_on,
     flexible,
     flexible_days,
     nearby,
@@ -43,7 +46,8 @@ def test_minimal_flight_command_uses_safe_defaults() -> None:
     assert trip["flexible_days"] == 3
     assert trip["nearby_airports"] is False
     assert trip["auto_nearby"] is True
-    assert trip["auto_baggage"] is True
+    assert trip["auto_baggage"] is False
+    assert trip["checked_bags"] == 2
     assert trip["carry_on_bags"] == 1
     assert trip["priority"] == Priority.BALANCED
 
@@ -135,6 +139,20 @@ def test_guided_search_collects_flexible_range_then_auto_nearby() -> None:
     assert next_state == BAGS
     assert context.user_data["trip"]["nearby_airports"] is False
     assert context.user_data["trip"]["auto_nearby"] is True
+
+
+def test_guided_baggage_defaults_are_two_checked_and_one_carry_on() -> None:
+    message = SimpleNamespace(text="2 checked (default)", reply_text=AsyncMock())
+    update = SimpleNamespace(message=message)
+    context = SimpleNamespace(user_data={"trip": {}})
+
+    assert asyncio.run(bags(update, context)) == CARRY_ON
+    assert context.user_data["trip"]["checked_bags"] == 2
+    assert context.user_data["trip"]["auto_baggage"] is False
+
+    message.text = "1 carry-on (default)"
+    asyncio.run(carry_on(update, context))
+    assert context.user_data["trip"]["carry_on_bags"] == 1
 
 
 def test_guided_round_trip_uses_duration_and_four_passenger_default_button() -> None:

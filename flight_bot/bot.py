@@ -68,11 +68,12 @@ logger = logging.getLogger(__name__)
     FLEX_DAYS,
     NEARBY,
     BAGS,
+    CARRY_ON,
     AIRLINES,
     BUDGET,
     PRIORITY,
     CONFIRM,
-) = range(15)
+) = range(16)
 
 
 def _keyboard(*rows: tuple[str, ...]) -> ReplyKeyboardMarkup:
@@ -114,8 +115,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/flight New York, NY | Los Angeles, CA | 2026-09-15\n\n"
         "Smart defaults: round trip returning after 7 nights, 4 adults, economy, "
         "flexible dates, nearby airports for domestic trips only, and automatic "
-        "baggage (0 checked "
-        "domestic; 2 checked + 1 carry-on international).\n\n"
+        "baggage (2 checked + 1 carry-on by default).\n\n"
         "Override with options such as --return 2026-09-20 --nights 5 "
         "--trip one-way --adults 2 --cabin business --flex no --nearby yes "
         "--bags 1 --carry-on 1 --prefer DL,UA --avoid NK,F9 --budget 1200 "
@@ -137,8 +137,8 @@ async def defaults_command(
         "• 4 adults in Economy\n"
         "• Flexible dates within ±3 days\n"
         "• Nearby airports: on domestic, off international\n"
-        "• Domestic baggage: 0 checked + 1 carry-on\n"
-        "• International baggage: 2 checked + 1 carry-on\n"
+        "• Baggage: 2 checked + 1 carry-on per traveler\n"
+        "• Optional Smart checked-bag mode: 0 domestic, 2 international\n"
         "• Balanced ranking\n\n"
         "Before searching, choose smart progressive search, the free suggested-date "
         "estimate, or the full live ±3-day comparison. Risky itineraries remain "
@@ -289,9 +289,9 @@ def parse_flight_command(args: list[str]) -> dict:
         "flexible_days": 3,
         "nearby_airports": False,
         "auto_nearby": True,
-        "checked_bags": 0,
+        "checked_bags": 2,
         "carry_on_bags": 1,
-        "auto_baggage": True,
+        "auto_baggage": False,
         "preferred_airlines": set(),
         "avoided_airlines": set(),
         "max_budget": None,
@@ -487,7 +487,7 @@ async def flight_command(
             "Example:\n"
             "/flight JFK LAX 2026-09-15\n\n"
             "This defaults to a 7-night round trip, 4 adults, economy, flexible "
-            "dates, domestic-only nearby airports, and smart baggage."
+            "dates, domestic-only nearby airports, 2 checked bags, and 1 carry-on."
         )
         return ConversationHandler.END
     context.user_data["trip"] = trip
@@ -817,8 +817,12 @@ async def nearby(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Choose Auto, Yes, or No.")
         return NEARBY
     await update.message.reply_text(
-        "Checked bags per traveler? Smart uses 0 domestic or 2 international.",
-        reply_markup=_keyboard(("Smart (recommended)",), ("0", "1", "2")),
+        "How many checked/check-in bags per traveler? Default is 2. Smart uses "
+        "0 domestically or 2 internationally.",
+        reply_markup=_keyboard(
+            ("0 checked", "1 checked", "2 checked (default)"),
+            ("Smart by route",),
+        ),
     )
     return BAGS
 
@@ -826,25 +830,29 @@ async def nearby(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def bags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.text.strip().lower().startswith("smart"):
         context.user_data["trip"]["checked_bags"] = 0
-        context.user_data["trip"]["carry_on_bags"] = 1
         context.user_data["trip"]["auto_baggage"] = True
-        await update.message.reply_text(
-            "Airline preferences? Use IATA codes like:\n"
-            "prefer: DL,UA; avoid: F9,NK\n\n"
-            "Or choose None.",
-            reply_markup=_keyboard(("None",)),
-        )
-        return AIRLINES
-    try:
-        count = int(update.message.text.strip())
-    except ValueError:
-        count = -1
+    else:
+        match = re.search(r"\d+", update.message.text.strip())
+        count = int(match.group()) if match else -1
+        if count not in {0, 1, 2}:
+            await update.message.reply_text("Choose 0, 1, 2, or Smart by route.")
+            return BAGS
+        context.user_data["trip"]["checked_bags"] = count
+        context.user_data["trip"]["auto_baggage"] = False
+    await update.message.reply_text(
+        "How many carry-on bags per traveler? Default is 1.",
+        reply_markup=_keyboard(("0 carry-on", "1 carry-on (default)", "2 carry-ons")),
+    )
+    return CARRY_ON
+
+
+async def carry_on(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    match = re.search(r"\d+", update.message.text.strip())
+    count = int(match.group()) if match else -1
     if count not in {0, 1, 2}:
-        await update.message.reply_text("Enter 0, 1, or 2.")
-        return BAGS
-    context.user_data["trip"]["checked_bags"] = count
-    context.user_data["trip"]["carry_on_bags"] = 1
-    context.user_data["trip"]["auto_baggage"] = False
+        await update.message.reply_text("Choose 0, 1, or 2 carry-on bags.")
+        return CARRY_ON
+    context.user_data["trip"]["carry_on_bags"] = count
     await update.message.reply_text(
         "Airline preferences? Use IATA codes like:\n"
         "prefer: DL,UA; avoid: F9,NK\n\n"
@@ -887,8 +895,12 @@ async def airlines(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["trip"]["avoided_airlines"] = avoided
     await update.message.reply_text(
         "Maximum total budget in USD for everyone? Send a number or choose "
-        "No maximum.",
-        reply_markup=_keyboard(("No maximum",)),
+        "one of the common limits.",
+        reply_markup=_keyboard(
+            ("No maximum",),
+            ("$500", "$1,000", "$1,500"),
+            ("$2,000", "$3,000", "$5,000"),
+        ),
     )
     return BUDGET
 
@@ -907,7 +919,11 @@ async def budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return BUDGET
     context.user_data["trip"]["max_budget"] = value
     await update.message.reply_text(
-        "What should I optimize for?",
+        "How should I rank the results?\n"
+        "• Balanced: best mix of price, duration, and stops\n"
+        "• Cheapest: puts price first\n"
+        "• Fastest: puts total travel time first\n"
+        "• Nonstop: strongly favors zero stops",
         reply_markup=_keyboard(
             ("Balanced", "Cheapest"), ("Fastest", "Nonstop")
         ),
@@ -947,7 +963,8 @@ async def show_confirmation(
         else ("yes" if trip["nearby_airports"] else "no")
     )
     baggage_text = (
-        "smart: 0 checked domestic; 2 checked + 1 carry-on international"
+        "smart checked: 0 domestic or 2 international; "
+        f"{trip.get('carry_on_bags', 1)} carry-on"
         if trip.get("auto_baggage")
         else (
             f"{trip['checked_bags']} checked + "
@@ -1022,7 +1039,7 @@ async def show_confirmation(
         f"{'yes, ±' + str(flexible_days_value) + ' days' if trip['flexible_dates'] else 'no'} | "
         f"Nearby airports: {nearby_text} | "
         f"Baggage: {baggage_text}\n"
-        f"Budget: {budget_text} | Priority: {trip['priority'].value}\n\n"
+        f"Budget: {budget_text} | Ranking: {trip['priority'].value}\n\n"
         f"{usage_label}: up to {maximum_provider_calls} "
         f"RouteStack search token(s).\n"
         f"{date_advice}\n"
@@ -1697,6 +1714,7 @@ def build_application(settings: Settings) -> Application:
             ],
             NEARBY: [MessageHandler(filters.TEXT & ~filters.COMMAND, nearby)],
             BAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, bags)],
+            CARRY_ON: [MessageHandler(filters.TEXT & ~filters.COMMAND, carry_on)],
             AIRLINES: [MessageHandler(filters.TEXT & ~filters.COMMAND, airlines)],
             BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, budget)],
             PRIORITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, priority)],

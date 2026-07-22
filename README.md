@@ -26,7 +26,7 @@ The bot does **not** search in the background and does **not** invent prices.
 - Smart progressive search that starts with one suggested date, expands to ±3
   days only when needed, and checks eligible domestic nearby airports last
 - Smart `/flight` defaults: 7-night round trip, four adults, economy, flexible
-  dates, nearby airports for domestic routes only, and route-aware baggage
+  dates, nearby airports for domestic routes only, 2 checked bags, and 1 carry-on
 - Local IATA airport/country resolution to avoid provider calls for exact codes
 - Five-minute identical-search cache with checkout-time fare revalidation
 - One-way and round-trip searches
@@ -40,7 +40,8 @@ The bot does **not** search in the background and does **not** invent prices.
   cabin, and single operating airline when available
 - Privacy-conscious click events in Railway logs for measuring popular routes
 - Optional nearby-airport comparison within roughly 100 km
-- Checked-bag, airline avoidance, budget, and optimization preferences
+- Separate checked-bag and carry-on choices, airline avoidance, preset/custom
+  budgets, and clearly explained ranking preferences
 - Best overall, cheapest, fastest, and flexible-date picks
 - Prominent, non-blocking warnings and ranking penalties for self-transfers,
   airport changes, overnight connections, tight/long layovers, multiple stops,
@@ -175,8 +176,9 @@ Single-word cities continue to work in the normal space-separated format.
 That command defaults to a round trip returning seven days later, four adults,
 economy, flexible dates within ±3 days, domestic-only nearby airports, and
 balanced ranking.
-Smart baggage requests 0 checked bags for domestic trips or 2 checked bags plus
-1 carry-on for international trips.
+The normal baggage default is 2 checked bags plus 1 carry-on per traveler.
+`--bags auto` instead requests 0 checked bags domestically or 2 internationally;
+the carry-on choice remains independently configurable.
 
 The guided `/search` flow uses the same automatic nearby-airport rule without
 asking an additional question: enabled domestically and disabled internationally.
@@ -195,9 +197,15 @@ to choose the live comparison window.
 The guided `/search` flow only normally requires typing the origin and
 destination. It provides an inline calendar for the start date and reply buttons
 for one-way/round trip, common trip durations, 1–9 passengers (4 is marked as the
-default), cabin, flexible yes/no, ±1/2/3/5/7 days, nearby airports, smart baggage,
-no airline preference, no maximum budget, and ranking priority. Nearby `Auto`
+default), cabin, flexible yes/no, ±1/2/3/5/7 days, nearby airports, 0/1/2 checked
+bags (2 default), 0/1/2 carry-ons (1 default), no airline preference, common
+maximum budgets or no maximum, and ranking priority. Nearby `Auto`
 means on for domestic trips and off for international trips.
+
+Ranking priority changes ordering, not which live fares are returned: `Balanced`
+uses price, duration, and stops; `Cheapest` emphasizes fare; `Fastest` emphasizes
+total travel time; and `Nonstop` strongly favors zero-stop itineraries. Safety
+warnings remain visible in every mode.
 
 The bot still asks for confirmation before spending RouteStack search tokens.
 When flexible dates are enabled, that confirmation first shows a free calendar

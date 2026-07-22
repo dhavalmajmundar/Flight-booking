@@ -34,6 +34,9 @@ def test_watch_safe_defaults_use_one_exact_search() -> None:
     assert pending.request.cabin == Cabin.ECONOMY
     assert pending.request.flexible_dates is False
     assert pending.request.nearby_airports is False
+    assert pending.request.checked_bags == 2
+    assert pending.request.carry_on_bags == 1
+    assert pending.request.auto_baggage is False
     assert pending.interval_hours == 24
     assert pending.drop_percent == 5
     assert 60 < pending.maximum_checks <= 240
@@ -59,6 +62,10 @@ def test_watch_overrides_and_request_round_trip_serialization() -> None:
             "business",
             "--prefer",
             "BA,AA",
+            "--bags",
+            "auto",
+            "--carry-on",
+            "2",
         ],
         settings(),
         now=datetime(2026, 7, 19, tzinfo=timezone.utc),
@@ -72,6 +79,8 @@ def test_watch_overrides_and_request_round_trip_serialization() -> None:
     assert restored.preferred_airlines == {"BA", "AA"}
     assert restored.max_layover_minutes == 300
     assert restored.flexible_days == 0
+    assert restored.auto_baggage is True
+    assert restored.carry_on_bags == 2
 
 
 def test_observed_guidance_uses_only_watch_history() -> None:

@@ -290,3 +290,37 @@ def test_custom_flexible_day_range_controls_search_count() -> None:
         return calls
 
     assert asyncio.run(run()) == 5
+
+
+def test_smart_checked_bags_do_not_override_carry_on_choice() -> None:
+    async def run() -> SearchRequest:
+        client = RouteStackClient(settings())
+
+        async def fake_resolve(query: str, find_alternatives: bool = False):
+            return query, query, [], "US"
+
+        async def fake_search_dates(*args, **kwargs):
+            return []
+
+        client.resolve_location = fake_resolve  # type: ignore[method-assign]
+        client._search_dates = fake_search_dates  # type: ignore[method-assign]
+        request = SearchRequest(
+            origin="JFK",
+            destination="LAX",
+            departure_date=date(2026, 11, 6),
+            return_date=None,
+            adults=4,
+            cabin=Cabin.ECONOMY,
+            flexible_dates=False,
+            nearby_airports=False,
+            checked_bags=2,
+            carry_on_bags=2,
+            auto_baggage=True,
+        )
+        await client.search(request)
+        await client.close()
+        return request
+
+    request = asyncio.run(run())
+    assert request.checked_bags == 0
+    assert request.carry_on_bags == 2

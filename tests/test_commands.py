@@ -8,11 +8,13 @@ from telegram.ext import ApplicationHandlerStop
 
 from flight_bot.bot import (
     BAGS,
+    BUDGET,
     CARRY_ON,
     BOT_COMMANDS,
     FLEX_DAYS,
     NEARBY,
     PASSENGERS,
+    PRIORITY,
     _nearby_search_allowance,
     _calendar_keyboard,
     _progressive_search,
@@ -20,6 +22,8 @@ from flight_bot.bot import (
     configure_bot_commands,
     bags,
     carry_on,
+    budget,
+    common_budget_values,
     flexible,
     flexible_days,
     nearby,
@@ -153,6 +157,46 @@ def test_guided_baggage_defaults_are_two_checked_and_one_carry_on() -> None:
     message.text = "1 carry-on (default)"
     asyncio.run(carry_on(update, context))
     assert context.user_data["trip"]["carry_on_bags"] == 1
+
+
+def test_common_budget_buttons_scale_by_route_cabin_and_passengers() -> None:
+    domestic = {
+        "origin": "JFK",
+        "destination": "LAX",
+        "cabin": Cabin.ECONOMY,
+        "adults": 4,
+        "return_date": date.today() + timedelta(days=30),
+    }
+    international = {
+        **domestic,
+        "destination": "LHR",
+    }
+    business = {**international, "cabin": Cabin.BUSINESS}
+
+    assert common_budget_values(domestic) == (1500, 2000, 2500, 3500)
+    assert common_budget_values(
+        {**domestic, "origin": "New York, NY", "destination": "Los Angeles, CA"}
+    ) == (1500, 2000, 2500, 3500)
+    assert common_budget_values(international) == (3000, 4000, 5000, 7000)
+    assert min(common_budget_values(business)) > max(
+        common_budget_values(international)
+    )
+    assert len(common_budget_values({**domestic, "adults": 1})) == 4
+
+
+def test_custom_budget_button_requests_an_amount_without_advancing() -> None:
+    message = SimpleNamespace(text="Custom amount", reply_text=AsyncMock())
+    update = SimpleNamespace(message=message)
+    context = SimpleNamespace(user_data={"trip": {}})
+
+    next_state = asyncio.run(budget(update, context))
+
+    assert next_state == BUDGET
+    assert "custom maximum" in message.reply_text.await_args.args[0].lower()
+
+    message.text = "2750"
+    assert asyncio.run(budget(update, context)) == PRIORITY
+    assert context.user_data["trip"]["max_budget"] == 2750
 
 
 def test_guided_round_trip_uses_duration_and_four_passenger_default_button() -> None:

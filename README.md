@@ -199,13 +199,25 @@ destination. It provides an inline calendar for the start date and reply buttons
 for one-way/round trip, common trip durations, 1–9 passengers (4 is marked as the
 default), cabin, flexible yes/no, ±1/2/3/5/7 days, nearby airports, 0/1/2 checked
 bags (2 default), 0/1/2 carry-ons (1 default), no airline preference, common
-maximum budgets or no maximum, and ranking priority. Nearby `Auto`
+route/cabin/passenger-aware maximum budgets, a custom amount, or no maximum,
+and ranking priority. Nearby `Auto`
 means on for domestic trips and off for international trips.
 
 Ranking priority changes ordering, not which live fares are returned: `Balanced`
 uses price, duration, and stops; `Cheapest` emphasizes fare; `Fastest` emphasizes
 total travel time; and `Nonstop` strongly favors zero-stop itineraries. Safety
 warnings remain visible in every mode.
+
+Budget buttons are planning limits rather than price forecasts. Domestic bands
+are anchored to the latest available public benchmarks: BTS reported a $428
+average U.S. domestic itinerary fare for Q1 2026, while ARC reported December
+2025 domestic averages of $514 for economy and $1,370 for premium tickets.
+Buttons scale those anchors by passenger count, cabin, and trip type. International
+buttons use wider planning bands because route variation is much larger. The bot
+does not call RouteStack to generate these buttons, and `Custom amount` accepts
+any positive USD total. Optional baggage and seat fees may not be in the fare
+budget. Sources: [BTS Air Fares](https://www.bts.gov/air-fares) and
+[ARC 2025 ticket sales](https://www2.arccorp.com/about-us/newsroom/2026-news-releases/december-2025-air-ticket-sales/).
 
 The bot still asks for confirmation before spending RouteStack search tokens.
 When flexible dates are enabled, that confirmation first shows a free calendar

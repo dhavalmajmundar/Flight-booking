@@ -894,19 +894,89 @@ async def airlines(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["trip"]["preferred_airlines"] = preferred
     context.user_data["trip"]["avoided_airlines"] = avoided
     await update.message.reply_text(
-        "Maximum total budget in USD for everyone? Send a number or choose "
-        "one of the common limits.",
-        reply_markup=_keyboard(
-            ("No maximum",),
-            ("$500", "$1,000", "$1,500"),
-            ("$2,000", "$3,000", "$5,000"),
-        ),
+        "Maximum airfare budget in USD for everyone? These planning limits "
+        "adjust for your route type, cabin, trip type, and passenger count. "
+        "Optional baggage/seat fees may be extra.",
+        reply_markup=_budget_keyboard(context.user_data["trip"]),
     )
     return BUDGET
 
 
+def _round_budget(value: float) -> int:
+    if value < 5_000:
+        step = 250
+    elif value < 15_000:
+        step = 500
+    else:
+        step = 1_000
+    return max(step, int(round(value / step) * step))
+
+
+def common_budget_values(trip: dict) -> tuple[int, ...]:
+    """Return researched planning bands, not live fare predictions.
+
+    Domestic anchors reflect 2026 BTS average-itinerary data and late-2025 ARC
+    economy/premium ticket reporting. International bands are intentionally wider
+    because distance and market variation dominate a single global average.
+    """
+    def country_hint(query: str) -> str:
+        exact = local_airport(query)
+        if exact:
+            return exact[2]
+        suggestions = local_airport_suggestions(query)
+        countries = {item[2] for item in suggestions if item[2]}
+        return next(iter(countries)) if len(countries) == 1 else ""
+
+    origin_country = country_hint(str(trip.get("origin", "")))
+    destination_country = country_hint(str(trip.get("destination", "")))
+    domestic = is_domestic(origin_country, destination_country)
+    cabin = trip.get("cabin", Cabin.ECONOMY)
+    if domestic:
+        per_person = {
+            Cabin.ECONOMY: 500,
+            Cabin.PREMIUM_ECONOMY: 750,
+            Cabin.BUSINESS: 1_400,
+            Cabin.FIRST: 1_800,
+        }[cabin]
+    else:
+        per_person = {
+            Cabin.ECONOMY: 1_000,
+            Cabin.PREMIUM_ECONOMY: 1_600,
+            Cabin.BUSINESS: 3_500,
+            Cabin.FIRST: 6_000,
+        }[cabin]
+    if not trip.get("return_date"):
+        per_person *= 0.6
+    center = per_person * int(trip.get("adults", 4))
+    values = {
+        _round_budget(center * multiplier)
+        for multiplier in (0.75, 1.0, 1.25, 1.75)
+    }
+    while len(values) < 4:
+        highest = max(values)
+        increment = 250 if highest < 5_000 else 500 if highest < 15_000 else 1_000
+        values.add(highest + increment)
+    return tuple(sorted(values))
+
+
+def _budget_keyboard(trip: dict) -> ReplyKeyboardMarkup:
+    values = [f"${value:,}" for value in common_budget_values(trip)]
+    return _keyboard(
+        tuple(values[:2]),
+        tuple(values[2:]),
+        ("Custom amount", "No maximum"),
+    )
+
+
 async def budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     answer = update.message.text.strip().lower().replace("$", "").replace(",", "")
+    if answer == "custom amount":
+        await update.message.reply_text(
+            "Enter your custom maximum airfare budget in USD for all travelers, "
+            "for example 2750.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return BUDGET
     if answer in {"none", "no", "n/a", "no maximum"}:
         value = None
     else:

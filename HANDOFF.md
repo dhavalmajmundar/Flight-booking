@@ -11,7 +11,7 @@ Last updated: 2026-07-22
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 43 automated tests passing
+- Verification: 45 automated tests passing
 
 ## User experience
 
@@ -73,6 +73,11 @@ Last updated: 2026-07-22
 - Ranking choices are explained in the prompt: balanced price/time/stops,
   cheapest-first, fastest-first, or strong nonstop preference. They reorder
   offers without hiding safety warnings.
+- Budget buttons are generated locally from route type, cabin, one-way/round-trip,
+  and passenger count. Domestic anchors reference BTS Q1 2026 ($428 average
+  itinerary) and ARC December 2025 ($514 economy/$1,370 premium); international
+  values are deliberately wider planning bands. `Custom amount` waits for any
+  positive USD total. No RouteStack call is used to create budget choices.
 - Telegram never collects payment details or issues tickets.
 
 ## Security and ownership

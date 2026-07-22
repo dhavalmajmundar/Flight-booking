@@ -9,6 +9,9 @@ The bot does **not** search in the background and does **not** invent prices.
 ## Features
 
 - Guided `/search` conversation
+- Button-driven guided setup with an inline start-date calendar, one-way/round-
+  trip selection, common trip durations, passenger counts, flexible range,
+  nearby-airport policy, baggage defaults, cabin, and optimization choices
 - Telegram slash-command menu registered automatically at startup
 - `/defaults` helper describing the smart settings without making a fare call
 - Owner-only access gate that stops unauthorized messages and callbacks before
@@ -22,13 +25,14 @@ The bot does **not** search in the background and does **not** invent prices.
 - One-line `/flight` command with optional filters
 - Smart progressive search that starts with one suggested date, expands to ±3
   days only when needed, and checks eligible domestic nearby airports last
-- Smart `/flight` defaults: 7-night round trip, one adult, economy, flexible
+- Smart `/flight` defaults: 7-night round trip, four adults, economy, flexible
   dates, nearby airports for domestic routes only, and route-aware baggage
 - Local IATA airport/country resolution to avoid provider calls for exact codes
 - Five-minute identical-search cache with checkout-time fare revalidation
 - One-way and round-trip searches
 - Economy, premium economy, business, and first class
-- Optional ±3-day flexible-date comparison while preserving trip length
+- Selectable ±1 to ±7-day flexible-date comparison (default ±3) while
+  preserving trip length
 - Top-three booking handoff buttons for the best overall, cheapest, and fastest
   distinct recommendations
 - Live revalidation before RouteStack generates a secure external checkout link
@@ -168,7 +172,7 @@ separate the three required fields with `|`:
 
 Single-word cities continue to work in the normal space-separated format.
 
-That command defaults to a round trip returning seven days later, one adult,
+That command defaults to a round trip returning seven days later, four adults,
 economy, flexible dates within ±3 days, domestic-only nearby airports, and
 balanced ranking.
 Smart baggage requests 0 checked bags for domestic trips or 2 checked bags plus
@@ -185,11 +189,20 @@ For all supported one-line options:
 
 Use `--nights 5` for a five-night round trip, `--trip one-way` for one-way,
 `--nearby yes|no|auto` to override nearby-airport behavior, or `--bags auto`
-to restore route-aware baggage after a manual override.
+to restore route-aware baggage after a manual override. Use `--flex-days 1..7`
+to choose the live comparison window.
+
+The guided `/search` flow only normally requires typing the origin and
+destination. It provides an inline calendar for the start date and reply buttons
+for one-way/round trip, common trip durations, 1–9 passengers (4 is marked as the
+default), cabin, flexible yes/no, ±1/2/3/5/7 days, nearby airports, smart baggage,
+no airline preference, no maximum budget, and ranking priority. Nearby `Auto`
+means on for domestic trips and off for international trips.
 
 The bot still asks for confirmation before spending RouteStack search tokens.
 When flexible dates are enabled, that confirmation first shows a free calendar
-estimate favoring Monday–Wednesday departures within ±3 days. Users can search
+estimate favoring Monday–Wednesday departures within the selected range. Users
+can search
 only that suggested date, choose smart progressive search, or choose the complete
 live comparison. Progressive mode stops after one call when it finds a usable
 low-risk result; otherwise it expands to nearby dates and finally eligible
@@ -267,8 +280,8 @@ docker run --env-file .env --restart unless-stopped flight-bot
 
 ## Data and pricing notes
 
-- Flexible-date mode makes up to seven provider searches: the requested dates and
-  matching trip-length shifts from three days earlier through three days later.
+- Flexible-date mode makes `2 × flexible days + 1` provider searches: seven at
+  the ±3 default, from three days earlier through three days later.
 - Those same results produce the cheapest travel-day table, so this comparison
   does not add provider calls. It compares departure dates rather than claiming
   there is a universal best weekday to purchase airfare.

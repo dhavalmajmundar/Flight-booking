@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import logging
 import re
 import secrets
@@ -64,13 +65,14 @@ logger = logging.getLogger(__name__)
     PASSENGERS,
     CABIN,
     FLEXIBLE,
+    FLEX_DAYS,
     NEARBY,
     BAGS,
     AIRLINES,
     BUDGET,
     PRIORITY,
     CONFIRM,
-) = range(14)
+) = range(15)
 
 
 def _keyboard(*rows: tuple[str, ...]) -> ReplyKeyboardMarkup:
@@ -88,8 +90,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Use /search and answer the guided questions. I will collect your route, "
-        "dates, passengers, cabin, baggage, airline preferences, budget, and "
-        "priority. No provider search happens until you confirm.\n\n"
+        "start date, duration, trip type, passengers, flexibility, nearby-airport "
+        "choice, cabin, baggage, airline preferences, budget, and priority. The "
+        "calendar and choice buttons mean only the route normally needs typing. "
+        "No provider search happens until you confirm.\n\n"
         "Use /defaults to review the smart settings without making a search.\n\n"
         "Price-watch commands:\n"
         "/watch JFK LAX 2026-09-15 --return 2026-09-22 --target 350 "
@@ -108,14 +112,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/flight JFK LAX 2026-09-15\n\n"
         "For cities with spaces:\n"
         "/flight New York, NY | Los Angeles, CA | 2026-09-15\n\n"
-        "Smart defaults: round trip returning after 7 nights, 1 adult, economy, "
+        "Smart defaults: round trip returning after 7 nights, 4 adults, economy, "
         "flexible dates, nearby airports for domestic trips only, and automatic "
         "baggage (0 checked "
         "domestic; 2 checked + 1 carry-on international).\n\n"
         "Override with options such as --return 2026-09-20 --nights 5 "
         "--trip one-way --adults 2 --cabin business --flex no --nearby yes "
         "--bags 1 --carry-on 1 --prefer DL,UA --avoid NK,F9 --budget 1200 "
-        "--priority balanced --max-layover 240\n\n"
+        "--priority balanced --max-layover 240 --flex-days 3\n\n"
         "Smart progressive search tries one suggested date first, expands to "
         "±3 days only when needed, then checks eligible domestic nearby airports "
         "only if results remain missing or risky. The confirmation always shows "
@@ -130,7 +134,7 @@ async def defaults_command(
     await update.message.reply_text(
         "Smart defaults for /flight:\n"
         "• Round trip returning 7 days later\n"
-        "• 1 adult in Economy\n"
+        "• 4 adults in Economy\n"
         "• Flexible dates within ±3 days\n"
         "• Nearby airports: on domestic, off international\n"
         "• Domestic baggage: 0 checked + 1 carry-on\n"
@@ -279,9 +283,10 @@ def parse_flight_command(args: list[str]) -> dict:
         "destination": args[1].strip().replace("_", " "),
         "departure_date": departure_value,
         "return_date": departure_value + timedelta(days=7),
-        "adults": 1,
+        "adults": 4,
         "cabin": Cabin.ECONOMY,
         "flexible_dates": True,
+        "flexible_days": 3,
         "nearby_airports": False,
         "auto_nearby": True,
         "checked_bags": 0,
@@ -300,6 +305,7 @@ def parse_flight_command(args: list[str]) -> dict:
         "--adults",
         "--cabin",
         "--flex",
+        "--flex-days",
         "--nearby",
         "--bags",
         "--carry-on",
@@ -365,6 +371,17 @@ def parse_flight_command(args: list[str]) -> dict:
             trip["cabin"] = cabin_map[cabin_value]
         elif option == "--flex":
             trip["flexible_dates"] = _yes_no(value, "--flex")
+            if not trip["flexible_dates"]:
+                trip["flexible_days"] = 0
+        elif option == "--flex-days":
+            try:
+                flex_days = int(value)
+            except ValueError as exc:
+                raise ValueError("--flex-days must be a number from 1 to 7") from exc
+            if not 1 <= flex_days <= 7:
+                raise ValueError("--flex-days must be a number from 1 to 7")
+            trip["flexible_dates"] = True
+            trip["flexible_days"] = flex_days
         elif option == "--nearby":
             if value.lower() == "auto":
                 trip["nearby_airports"] = False
@@ -469,7 +486,7 @@ async def flight_command(
             f"Invalid flight command: {exc}\n\n"
             "Example:\n"
             "/flight JFK LAX 2026-09-15\n\n"
-            "This defaults to a 7-night round trip, 1 adult, economy, flexible "
+            "This defaults to a 7-night round trip, 4 adults, economy, flexible "
             "dates, domestic-only nearby airports, and smart baggage."
         )
         return ConversationHandler.END
@@ -544,10 +561,106 @@ async def destination(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             )
             return DESTINATION
     context.user_data["trip"]["destination"] = text
+    today = date.today()
     await update.message.reply_text(
-        "Departure date? Use YYYY-MM-DD, for example 2026-09-15."
+        "Choose your trip start date from the calendar. You can still type "
+        "YYYY-MM-DD if preferred.",
+        reply_markup=_calendar_keyboard(today.year, today.month),
     )
     return DEPARTURE
+
+
+def _shift_month(year: int, month: int, offset: int) -> tuple[int, int]:
+    value = year * 12 + month - 1 + offset
+    return divmod(value, 12)[0], divmod(value, 12)[1] + 1
+
+
+def _calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
+    today = date.today()
+    previous_year, previous_month = _shift_month(year, month, -1)
+    next_year, next_month = _shift_month(year, month, 1)
+    current_month = (today.year, today.month)
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                "‹",
+                callback_data=(
+                    f"cal:nav:{previous_year:04d}-{previous_month:02d}"
+                    if (year, month) > current_month
+                    else "cal:noop"
+                ),
+            ),
+            InlineKeyboardButton(
+                f"{calendar.month_name[month]} {year}",
+                callback_data="cal:noop",
+            ),
+            InlineKeyboardButton(
+                "›",
+                callback_data=f"cal:nav:{next_year:04d}-{next_month:02d}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(day, callback_data="cal:noop")
+            for day in ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
+        ],
+    ]
+    for week in calendar.monthcalendar(year, month):
+        row: list[InlineKeyboardButton] = []
+        for day_number in week:
+            if not day_number:
+                row.append(InlineKeyboardButton(" ", callback_data="cal:noop"))
+                continue
+            candidate = date(year, month, day_number)
+            row.append(
+                InlineKeyboardButton(
+                    str(day_number) if candidate >= today else "·",
+                    callback_data=(
+                        f"cal:pick:{candidate.isoformat()}"
+                        if candidate >= today
+                        else "cal:noop"
+                    ),
+                )
+            )
+        rows.append(row)
+    rows.append([InlineKeyboardButton("Cancel", callback_data="cal:cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def calendar_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+    if data == "cal:noop":
+        return DEPARTURE
+    if data == "cal:cancel":
+        context.user_data.pop("trip", None)
+        await query.edit_message_text("Search cancelled. No flight search was made.")
+        return ConversationHandler.END
+    if data.startswith("cal:nav:"):
+        try:
+            year, month = map(int, data.removeprefix("cal:nav:").split("-"))
+        except ValueError:
+            return DEPARTURE
+        await query.edit_message_reply_markup(
+            reply_markup=_calendar_keyboard(year, month)
+        )
+        return DEPARTURE
+    try:
+        parsed = date.fromisoformat(data.removeprefix("cal:pick:"))
+    except ValueError:
+        return DEPARTURE
+    if parsed < date.today():
+        await query.message.reply_text("Choose today or a future date.")
+        return DEPARTURE
+    context.user_data["trip"]["departure_date"] = parsed
+    await query.edit_message_text(f"Start date selected: {parsed:%A, %B %d, %Y}")
+    await query.message.reply_text(
+        "Is this one-way or round trip?",
+        reply_markup=_keyboard(("One-way", "Round trip")),
+    )
+    return TRIP_TYPE
 
 
 def _parse_future_date(text: str) -> date | None:
@@ -573,6 +686,18 @@ async def departure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return TRIP_TYPE
 
 
+async def _ask_passengers(message) -> int:
+    await message.reply_text(
+        "How many adult passengers? Default is 4.",
+        reply_markup=_keyboard(
+            ("1", "2", "3"),
+            ("4 (default)", "5", "6"),
+            ("7", "8", "9"),
+        ),
+    )
+    return PASSENGERS
+
+
 async def trip_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     answer = update.message.text.strip().lower()
     if answer not in {"one-way", "one way", "round trip", "round-trip"}:
@@ -580,34 +705,34 @@ async def trip_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return TRIP_TYPE
     if answer.startswith("one"):
         context.user_data["trip"]["return_date"] = None
-        await update.message.reply_text(
-            "How many adult passengers? (1–9)", reply_markup=ReplyKeyboardRemove()
-        )
-        return PASSENGERS
+        return await _ask_passengers(update.message)
     await update.message.reply_text(
-        "Return date? Use YYYY-MM-DD.", reply_markup=ReplyKeyboardRemove()
+        "How long is the round trip? Choose the number of days after departure "
+        "to return. Default is 7 days.",
+        reply_markup=_keyboard(
+            ("3 days", "5 days", "7 days (default)"),
+            ("10 days", "14 days", "21 days"),
+            ("30 days",),
+        ),
     )
     return RETURN
 
 
 async def return_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    parsed = _parse_future_date(update.message.text)
     departing = context.user_data["trip"]["departure_date"]
-    if not parsed or parsed <= departing:
-        await update.message.reply_text(
-            "Return must be after departure. Send it as YYYY-MM-DD."
-        )
+    answer = update.message.text.strip()
+    match = re.search(r"\d+", answer)
+    duration = int(match.group()) if match else 0
+    if not 1 <= duration <= 365:
+        await update.message.reply_text("Choose a trip duration from 1 to 365 days.")
         return RETURN
-    context.user_data["trip"]["return_date"] = parsed
-    await update.message.reply_text("How many adult passengers? (1–9)")
-    return PASSENGERS
+    context.user_data["trip"]["return_date"] = departing + timedelta(days=duration)
+    return await _ask_passengers(update.message)
 
 
 async def passengers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        count = int(update.message.text.strip())
-    except ValueError:
-        count = 0
+    match = re.search(r"\d+", update.message.text.strip())
+    count = int(match.group()) if match else 0
     if not 1 <= count <= 9:
         await update.message.reply_text("Enter a number from 1 to 9.")
         return PASSENGERS
@@ -634,7 +759,7 @@ async def cabin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return CABIN
     context.user_data["trip"]["cabin"] = mapping[value]
     await update.message.reply_text(
-        "Search nearby dates within ±3 days? The trip length stays the same.",
+        "Are your travel dates flexible?",
         reply_markup=_keyboard(("Yes", "No")),
     )
     return FLEXIBLE
@@ -646,32 +771,70 @@ async def flexible(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Please choose Yes or No.")
         return FLEXIBLE
     context.user_data["trip"]["flexible_dates"] = answer == "yes"
-    context.user_data["trip"]["nearby_airports"] = False
-    context.user_data["trip"]["auto_nearby"] = True
-    await update.message.reply_text(
-        "Nearby airports will be included automatically for domestic trips and "
-        "disabled for international trips.\n\n"
-        "How many checked bags must be included per traveler? (0–2)",
-        reply_markup=ReplyKeyboardRemove(),
+    if answer == "yes":
+        await update.message.reply_text(
+            "How many days earlier or later can you travel? Default is ±3 days.",
+            reply_markup=_keyboard(
+                ("±1 day", "±2 days", "±3 days (default)"),
+                ("±5 days", "±7 days"),
+            ),
+        )
+        return FLEX_DAYS
+    context.user_data["trip"]["flexible_days"] = 0
+    return await _ask_nearby(update.message)
+
+
+async def flexible_days(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    match = re.search(r"\d+", update.message.text.strip())
+    days = int(match.group()) if match else 0
+    if not 1 <= days <= 7:
+        await update.message.reply_text("Choose a flexible range from ±1 to ±7 days.")
+        return FLEX_DAYS
+    context.user_data["trip"]["flexible_days"] = days
+    return await _ask_nearby(update.message)
+
+
+async def _ask_nearby(message) -> int:
+    await message.reply_text(
+        "Include nearby airports? Auto is recommended: yes for domestic trips "
+        "and no for international trips.",
+        reply_markup=_keyboard(("Auto (recommended)",), ("Yes", "No")),
     )
-    return BAGS
+    return NEARBY
 
 
 async def nearby(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     answer = update.message.text.strip().lower()
-    if answer not in {"yes", "no"}:
-        await update.message.reply_text("Please choose Yes or No.")
+    if answer.startswith("auto"):
+        context.user_data["trip"]["nearby_airports"] = False
+        context.user_data["trip"]["auto_nearby"] = True
+    elif answer in {"yes", "no"}:
+        context.user_data["trip"]["nearby_airports"] = answer == "yes"
+        context.user_data["trip"]["auto_nearby"] = False
+    else:
+        await update.message.reply_text("Choose Auto, Yes, or No.")
         return NEARBY
-    context.user_data["trip"]["nearby_airports"] = answer == "yes"
-    context.user_data["trip"]["auto_nearby"] = False
     await update.message.reply_text(
-        "How many checked bags must be included per traveler? (0–2)",
-        reply_markup=ReplyKeyboardRemove(),
+        "Checked bags per traveler? Smart uses 0 domestic or 2 international.",
+        reply_markup=_keyboard(("Smart (recommended)",), ("0", "1", "2")),
     )
     return BAGS
 
 
 async def bags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if update.message.text.strip().lower().startswith("smart"):
+        context.user_data["trip"]["checked_bags"] = 0
+        context.user_data["trip"]["carry_on_bags"] = 1
+        context.user_data["trip"]["auto_baggage"] = True
+        await update.message.reply_text(
+            "Airline preferences? Use IATA codes like:\n"
+            "prefer: DL,UA; avoid: F9,NK\n\n"
+            "Or choose None.",
+            reply_markup=_keyboard(("None",)),
+        )
+        return AIRLINES
     try:
         count = int(update.message.text.strip())
     except ValueError:
@@ -685,7 +848,8 @@ async def bags(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
         "Airline preferences? Use IATA codes like:\n"
         "prefer: DL,UA; avoid: F9,NK\n\n"
-        "Or send “none”."
+        "Or choose None.",
+        reply_markup=_keyboard(("None",)),
     )
     return AIRLINES
 
@@ -722,14 +886,16 @@ async def airlines(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["trip"]["preferred_airlines"] = preferred
     context.user_data["trip"]["avoided_airlines"] = avoided
     await update.message.reply_text(
-        "Maximum total budget in USD for everyone? Send a number or “none”."
+        "Maximum total budget in USD for everyone? Send a number or choose "
+        "No maximum.",
+        reply_markup=_keyboard(("No maximum",)),
     )
     return BUDGET
 
 
 async def budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     answer = update.message.text.strip().lower().replace("$", "").replace(",", "")
-    if answer in {"none", "no", "n/a"}:
+    if answer in {"none", "no", "n/a", "no maximum"}:
         value = None
     else:
         try:
@@ -771,8 +937,9 @@ async def show_confirmation(
         f"${trip['max_budget']:,.2f}" if trip["max_budget"] else "no maximum"
     )
     nearby_search_allowance = _nearby_search_allowance(trip)
+    flexible_days_value = int(trip.get("flexible_days", 3))
     maximum_provider_calls = (
-        7 if trip["flexible_dates"] else 1
+        2 * flexible_days_value + 1 if trip["flexible_dates"] else 1
     ) + nearby_search_allowance
     nearby_text = (
         "smart: yes domestic; no international"
@@ -790,7 +957,9 @@ async def show_confirmation(
     date_advice = ""
     confirmation_buttons: tuple[str, ...]
     if trip["flexible_dates"]:
-        suggested = suggested_departure_date(trip["departure_date"])
+        suggested = suggested_departure_date(
+            trip["departure_date"], flexible_days_value
+        )
         trip["suggested_departure_date"] = suggested
         shift = (suggested - trip["departure_date"]).days
         shift_text = (
@@ -810,7 +979,7 @@ async def show_confirmation(
         confirmation_buttons = (
             "Smart progressive search",
             "Search suggested date",
-            "Compare all ±3 days",
+            f"Compare all ±{flexible_days_value} days",
             "Cancel",
         )
     else:
@@ -846,7 +1015,11 @@ async def show_confirmation(
         f"{trip['origin']} → {trip['destination']}\n"
         f"Depart: {trip['departure_date']} | Return: {return_text}\n"
         f"{trip['adults']} adult(s) | {trip['cabin'].value.replace('_', ' ').title()}\n"
-        f"Flexible: {'yes, ±3 days' if trip['flexible_dates'] else 'no'} | "
+        f"Trip duration: "
+        f"{(trip['return_date'] - trip['departure_date']).days if trip['return_date'] else 'one-way'}"
+        f"{' days' if trip['return_date'] else ''}\n"
+        f"Flexible: "
+        f"{'yes, ±' + str(flexible_days_value) + ' days' if trip['flexible_dates'] else 'no'} | "
         f"Nearby airports: {nearby_text} | "
         f"Baggage: {baggage_text}\n"
         f"Budget: {budget_text} | Priority: {trip['priority'].value}\n\n"
@@ -871,8 +1044,8 @@ def _nearby_search_allowance(trip: dict) -> int:
     return 4
 
 
-def suggested_departure_date(departure: date) -> date:
-    """Choose a no-call weekday candidate within ±3 days.
+def suggested_departure_date(departure: date, flexible_days: int = 3) -> date:
+    """Choose a no-call weekday candidate within the allowed flexible range.
 
     This is deliberately a broad calendar heuristic, not a fare prediction.
     Monday through Wednesday are preferred, followed by Thursday, Saturday,
@@ -889,7 +1062,7 @@ def suggested_departure_date(departure: date) -> date:
     }
     candidates = [
         departure + timedelta(days=shift)
-        for shift in range(-3, 4)
+        for shift in range(-flexible_days, flexible_days + 1)
         if departure + timedelta(days=shift) >= date.today()
     ]
     return min(
@@ -917,14 +1090,14 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if trip["return_date"]:
             trip["return_date"] += shift
         trip["flexible_dates"] = False
-    elif answer == "compare all ±3 days" and trip["flexible_dates"]:
+    elif answer.startswith("compare all ±") and trip["flexible_dates"]:
         trip.pop("suggested_departure_date", None)
     elif answer == "search now":
         trip.pop("suggested_departure_date", None)
     else:
         await update.message.reply_text(
             "Choose Smart progressive search, Search suggested date, "
-            "Compare all ±3 days, or Cancel."
+            f"Compare all ±{trip.get('flexible_days', 3)} days, or Cancel."
             if trip["flexible_dates"]
             else "Choose Search now or Cancel."
         )
@@ -949,7 +1122,7 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         else:
             offers, origin_label, destination_label = await client.search(request)
             search_note = (
-                "full ±3-day and eligible nearby-airport comparison"
+                f"full ±{request.flexible_days}-day and eligible nearby-airport comparison"
                 if request.flexible_dates
                 else "single-date search"
             )
@@ -1046,7 +1219,9 @@ async def _progressive_search(
     client: RouteStackClient, request: SearchRequest
 ) -> tuple[list[FlightOption], str, str, SearchRequest, str]:
     """Spend search calls in stages and stop once a usable itinerary appears."""
-    suggested = suggested_departure_date(request.departure_date)
+    suggested = suggested_departure_date(
+        request.departure_date, request.flexible_days
+    )
     shift = suggested - request.departure_date
     first_request = replace(
         request,
@@ -1080,7 +1255,8 @@ async def _progressive_search(
             origin_label,
             destination_label,
             date_request,
-            "expanded to ±3 days because the first stage had no usable low-risk result",
+            f"expanded to ±{request.flexible_days} days because the first stage "
+            "had no usable low-risk result",
         )
 
     if not request.auto_nearby and not request.nearby_airports:
@@ -1089,7 +1265,8 @@ async def _progressive_search(
             origin_label,
             destination_label,
             date_request,
-            "expanded to ±3 days; nearby airports were disabled by the request",
+            f"expanded to ±{request.flexible_days} days; nearby airports were "
+            "disabled by the request",
         )
     airport_request = replace(request, flexible_dates=True)
     airport_offers, origin_label, destination_label = await client.search(
@@ -1100,7 +1277,8 @@ async def _progressive_search(
         "expanded to eligible domestic nearby airports after date results "
         "remained limited or risky"
         if airport_request.nearby_airports
-        else "expanded to ±3 days; nearby airports stayed off for this route"
+        else f"expanded to ±{request.flexible_days} days; nearby airports stayed "
+        "off for this route"
     )
     return (
         combined,
@@ -1503,7 +1681,10 @@ def build_application(settings: Settings) -> Application:
             DESTINATION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, destination)
             ],
-            DEPARTURE: [MessageHandler(filters.TEXT & ~filters.COMMAND, departure)],
+            DEPARTURE: [
+                CallbackQueryHandler(calendar_callback, pattern=r"^cal:"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, departure),
+            ],
             TRIP_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, trip_type)],
             RETURN: [MessageHandler(filters.TEXT & ~filters.COMMAND, return_date)],
             PASSENGERS: [
@@ -1511,6 +1692,9 @@ def build_application(settings: Settings) -> Application:
             ],
             CABIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, cabin)],
             FLEXIBLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, flexible)],
+            FLEX_DAYS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, flexible_days)
+            ],
             NEARBY: [MessageHandler(filters.TEXT & ~filters.COMMAND, nearby)],
             BAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, bags)],
             AIRLINES: [MessageHandler(filters.TEXT & ~filters.COMMAND, airlines)],

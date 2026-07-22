@@ -9,12 +9,20 @@ from telegram.ext import ApplicationHandlerStop
 from flight_bot.bot import (
     BAGS,
     BOT_COMMANDS,
+    FLEX_DAYS,
+    NEARBY,
+    PASSENGERS,
     _nearby_search_allowance,
+    _calendar_keyboard,
     _progressive_search,
     access_gate,
     configure_bot_commands,
     flexible,
+    flexible_days,
+    nearby,
+    passengers,
     parse_flight_command,
+    return_date,
     suggested_departure_date,
 )
 from flight_bot.models import Cabin, FlightOption, Leg, Priority, SearchRequest
@@ -29,9 +37,10 @@ def test_minimal_flight_command_uses_safe_defaults() -> None:
     trip = parse_flight_command(["JFK", "LAX", future_date()])
     assert trip["origin"] == "JFK"
     assert trip["return_date"] == trip["departure_date"] + timedelta(days=7)
-    assert trip["adults"] == 1
+    assert trip["adults"] == 4
     assert trip["cabin"] == Cabin.ECONOMY
     assert trip["flexible_dates"] is True
+    assert trip["flexible_days"] == 3
     assert trip["nearby_airports"] is False
     assert trip["auto_nearby"] is True
     assert trip["auto_baggage"] is True
@@ -55,6 +64,8 @@ def test_full_flight_command() -> None:
             "business",
             "--flex",
             "yes",
+            "--flex-days",
+            "5",
             "--nearby",
             "no",
             "--bags",
@@ -75,6 +86,7 @@ def test_full_flight_command() -> None:
     assert trip["preferred_airlines"] == {"DL", "UA"}
     assert trip["max_budget"] == 1200
     assert trip["priority"] == Priority.CHEAPEST
+    assert trip["flexible_days"] == 5
 
 
 def test_unknown_option_is_rejected() -> None:
@@ -105,16 +117,58 @@ def test_one_way_and_manual_baggage_override() -> None:
     assert trip["auto_nearby"] is False
 
 
-def test_guided_search_uses_automatic_nearby_default() -> None:
+def test_guided_search_collects_flexible_range_then_auto_nearby() -> None:
     message = SimpleNamespace(text="Yes", reply_text=AsyncMock())
     update = SimpleNamespace(message=message)
     context = SimpleNamespace(user_data={"trip": {}})
 
     next_state = asyncio.run(flexible(update, context))
+    assert next_state == FLEX_DAYS
 
+    message.text = "±3 days (default)"
+    next_state = asyncio.run(flexible_days(update, context))
+    assert next_state == NEARBY
+    assert context.user_data["trip"]["flexible_days"] == 3
+
+    message.text = "Auto (recommended)"
+    next_state = asyncio.run(nearby(update, context))
     assert next_state == BAGS
     assert context.user_data["trip"]["nearby_airports"] is False
     assert context.user_data["trip"]["auto_nearby"] is True
+
+
+def test_guided_round_trip_uses_duration_and_four_passenger_default_button() -> None:
+    departure_day = date.today() + timedelta(days=30)
+    message = SimpleNamespace(text="7 days (default)", reply_text=AsyncMock())
+    update = SimpleNamespace(message=message)
+    context = SimpleNamespace(user_data={"trip": {"departure_date": departure_day}})
+
+    next_state = asyncio.run(return_date(update, context))
+
+    assert context.user_data["trip"]["return_date"] == departure_day + timedelta(days=7)
+    assert next_state == PASSENGERS
+    keyboard = message.reply_text.await_args.kwargs["reply_markup"]
+    assert any(
+        button.text == "4 (default)"
+        for row in keyboard.keyboard
+        for button in row
+    )
+
+    message.text = "4 (default)"
+    asyncio.run(passengers(update, context))
+    assert context.user_data["trip"]["adults"] == 4
+
+
+def test_calendar_keyboard_has_future_date_navigation_without_api_calls() -> None:
+    today = date.today()
+    keyboard = _calendar_keyboard(today.year, today.month)
+    callback_values = {
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+    }
+    assert any(value and value.startswith("cal:pick:") for value in callback_values)
+    assert any(value and value.startswith("cal:nav:") for value in callback_values)
 
 
 def test_no_call_date_suggestion_prefers_nearby_midweek() -> None:

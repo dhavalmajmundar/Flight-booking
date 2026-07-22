@@ -59,7 +59,7 @@ def parse_watch_command(
     now = now or datetime.now(timezone.utc)
     departure = _future_date(args[2], now.date())
     returning = departure + timedelta(days=7)
-    adults = 1
+    adults = 4
     cabin = Cabin.ECONOMY
     target: float | None = None
     drop_percent = 5.0
@@ -174,6 +174,7 @@ def parse_watch_command(
         adults=adults,
         cabin=cabin,
         flexible_dates=False,
+        flexible_days=0,
         nearby_airports=False,
         checked_bags=0,
         carry_on_bags=1,

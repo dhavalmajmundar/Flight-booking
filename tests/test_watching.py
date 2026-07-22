@@ -30,7 +30,7 @@ def test_watch_safe_defaults_use_one_exact_search() -> None:
         now=datetime(2026, 7, 19, tzinfo=timezone.utc),
     )
     assert pending.request.return_date == date(2026, 9, 22)
-    assert pending.request.adults == 1
+    assert pending.request.adults == 4
     assert pending.request.cabin == Cabin.ECONOMY
     assert pending.request.flexible_dates is False
     assert pending.request.nearby_airports is False
@@ -71,6 +71,7 @@ def test_watch_overrides_and_request_round_trip_serialization() -> None:
     assert restored.cabin == Cabin.BUSINESS
     assert restored.preferred_airlines == {"BA", "AA"}
     assert restored.max_layover_minutes == 300
+    assert restored.flexible_days == 0
 
 
 def test_observed_guidance_uses_only_watch_history() -> None:

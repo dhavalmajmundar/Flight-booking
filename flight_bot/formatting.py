@@ -37,7 +37,9 @@ def _flexible_date_lines(
     cheapest = results.cheapest_travel_date
     cheapest_date = cheapest.legs[0].departure.date()
     requested_option = dict(results.lowest_by_date).get(request.departure_date)
-    lines = ["📅 <b>Cheapest travel-day check (±3 days)</b>"]
+    lines = [
+        f"📅 <b>Cheapest travel-day check (±{request.flexible_days} days)</b>"
+    ]
     for travel_date, option in results.lowest_by_date:
         marker = " 🏆" if option is cheapest else ""
         lines.append(

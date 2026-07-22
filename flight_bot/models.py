@@ -40,6 +40,7 @@ class SearchRequest:
     priority: Priority = Priority.BALANCED
     currency: str = "USD"
     max_layover_minutes: int = 300
+    flexible_days: int = 3
 
     @property
     def round_trip(self) -> bool:

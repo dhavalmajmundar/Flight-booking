@@ -62,12 +62,13 @@ def request_to_json(request: SearchRequest) -> str:
         ),
         "adults": request.adults,
         "cabin": request.cabin.value,
-        "flexible_dates": False,
-        "nearby_airports": False,
+        "flexible_dates": request.flexible_dates,
+        "flexible_days": request.flexible_days,
+        "nearby_airports": request.nearby_airports,
         "checked_bags": request.checked_bags,
         "carry_on_bags": request.carry_on_bags,
         "auto_baggage": request.auto_baggage,
-        "auto_nearby": False,
+        "auto_nearby": request.auto_nearby,
         "preferred_airlines": sorted(request.preferred_airlines),
         "avoided_airlines": sorted(request.avoided_airlines),
         "max_budget": request.max_budget,
@@ -91,6 +92,7 @@ def request_from_json(raw: str | dict[str, Any]) -> SearchRequest:
     payload["preferred_airlines"] = set(payload.get("preferred_airlines", []))
     payload["avoided_airlines"] = set(payload.get("avoided_airlines", []))
     payload.setdefault("max_layover_minutes", 300)
+    payload.setdefault("flexible_days", 3)
     return SearchRequest(**payload)
 
 

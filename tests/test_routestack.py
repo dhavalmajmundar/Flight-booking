@@ -256,3 +256,37 @@ def test_auto_nearby_is_on_domestic_and_off_international() -> None:
     international = asyncio.run(run_route("LHR", "GB"))
     assert domestic.nearby_airports is True
     assert international.nearby_airports is False
+
+
+def test_custom_flexible_day_range_controls_search_count() -> None:
+    async def run() -> int:
+        client = RouteStackClient(settings())
+        calls = 0
+
+        async def fake_resolve(query: str, find_alternatives: bool = False):
+            return query, query, [], "US"
+
+        async def fake_search_dates(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return []
+
+        client.resolve_location = fake_resolve  # type: ignore[method-assign]
+        client._search_dates = fake_search_dates  # type: ignore[method-assign]
+        request = SearchRequest(
+            origin="JFK",
+            destination="LAX",
+            departure_date=date(2026, 11, 6),
+            return_date=date(2026, 11, 13),
+            adults=4,
+            cabin=Cabin.ECONOMY,
+            flexible_dates=True,
+            flexible_days=2,
+            nearby_airports=False,
+            checked_bags=0,
+        )
+        await client.search(request)
+        await client.close()
+        return calls
+
+    assert asyncio.run(run()) == 5

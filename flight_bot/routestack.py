@@ -272,7 +272,11 @@ class RouteStackClient:
                     destination_country,
                 ) = destination_result
 
-        shifts = range(-3, 4) if request.flexible_dates else (0,)
+        shifts = (
+            range(-request.flexible_days, request.flexible_days + 1)
+            if request.flexible_dates
+            else (0,)
+        )
         searches = []
         for shift in shifts:
             departure = request.departure_date + timedelta(days=shift)

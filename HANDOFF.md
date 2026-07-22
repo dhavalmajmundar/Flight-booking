@@ -1,6 +1,6 @@
 # Flight Bot Handoff
 
-Last updated: 2026-07-19
+Last updated: 2026-07-22
 
 ## Current status
 
@@ -11,11 +11,15 @@ Last updated: 2026-07-19
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 38 automated tests passing
+- Verification: 41 automated tests passing
 
 ## User experience
 
 - `/search` starts the guided search.
+- Guided search uses an inline month calendar for the start date and reply
+  buttons for trip type, round-trip duration, 1–9 passengers, cabin, flexibility,
+  ±1/2/3/5/7 flexible days, nearby-airport behavior, baggage, skip choices, and
+  priority. Only origin/destination normally require typing.
 - `/flight ORIGIN DESTINATION YYYY-MM-DD` starts a one-line search.
 - Multi-word cities, states, and airport names use pipe separators, for example
   `/flight New York, NY | Los Angeles, CA | 2026-09-15`. The same format works
@@ -29,9 +33,9 @@ Last updated: 2026-07-19
   support helpers.
 - One-line defaults:
   - Round trip, returning seven days later
-  - One adult
+  - Four adults
   - Economy
-  - Flexible dates within ±3 days
+  - Flexible dates within ±3 days; selectable from ±1 to ±7
   - Nearby airports enabled domestically and disabled internationally
   - Domestic baggage: 0 checked bags and 1 carry-on
   - International baggage: 2 checked bags and 1 carry-on
@@ -42,7 +46,7 @@ Last updated: 2026-07-19
   - Smart progressive search (one suggested date, then dates, then eligible
     domestic nearby airports only when earlier stages remain missing or risky)
   - Search only the suggested date
-  - Compare all dates within ±3 days
+  - Compare all dates within the selected ±1 to ±7-day range
   - Cancel without making a fare call
 - The full comparison shows the cheapest live departure day and savings versus
   the requested date.
@@ -110,6 +114,8 @@ Last updated: 2026-07-19
 - Overlapping flexible-date searches can reuse cached date results.
 - Progressive stages share that cache, preventing the first date from being
   searched twice when the bot expands.
+- Flexible search usage is calculated dynamically as `2 × days + 1`, plus any
+  eligible nearby-airport searches; confirmation shows that maximum.
 - Cached offers are labeled and always revalidated before checkout.
 - Confirmation screens disclose the maximum possible RouteStack search calls.
 

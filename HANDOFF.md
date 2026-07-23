@@ -15,6 +15,30 @@ Last updated: 2026-07-22
   analysis clean; Android and Windows release builds passed locally/through
   GitHub Actions run `29972564983`
 
+## Paused work in progress — compact desktop UI
+
+- Paused at the user's request on 2026-07-22. Do not treat the current Flutter
+  working tree as complete or push it to `main` without finishing verification.
+- Stable remote `main` remains commit `29f88a7`; Railway is running that API and
+  the previously verified companion build is commit `7a17ff2`.
+- Uncommitted changes are intentionally present in:
+  - `client_app/lib/screens/search_screen.dart`
+  - `client_app/lib/screens/settings_screen.dart`
+  - `client_app/test/widget_test.dart`
+- Search was being changed from one tall form to a compact desktop tab layout;
+  Settings was changed to responsive two-column cards. Mobile remains intended
+  to use a touch-friendly single column.
+- Desktop viewport regression tests were added for Search and Settings. Settings
+  passed at a `1179 x 993` content viewport. Search originally failed because
+  its action button was below the viewport; a three-tab replacement was patched
+  immediately before pausing and has not yet been formatted or tested.
+- Resume by running `dart format` on the three Flutter files, then `flutter
+  analyze` and `flutter test`. Adjust the Search tab height/layout until both
+  desktop-fit tests pass, visually verify Windows, rebuild both packages, update
+  this handoff, and only then commit/push.
+- `Flight-Companion/` and the root `FlightCompanion-Windows.zip` are the user's
+  extracted/local Windows installation files. Do not add them to Git.
+
 ## Companion applications
 
 - `client_app/` is one responsive Flutter codebase for Android and Windows.

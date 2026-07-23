@@ -71,6 +71,18 @@ def test_comfort_preferences_warn_and_penalize_without_filtering() -> None:
     assert any("maximum" in warning for warning in red_eye.warnings)
 
 
+def test_over_budget_offer_remains_visible_with_warning() -> None:
+    expensive = option("expensive", 500, 300, 0)
+    affordable = option("affordable", 250, 360, 0)
+    search = request()
+    search.max_budget = 300
+    result = rank_flights([expensive, affordable], search)
+    assert result is not None
+    assert expensive in result.ordered
+    assert any("budget" in warning for warning in expensive.warnings)
+    assert result.best_overall is affordable
+
+
 def test_cheapest_priority_favors_price() -> None:
     cheap = option("cheap", 100, 360, 1)
     expensive = option("expensive", 300, 300, 0)

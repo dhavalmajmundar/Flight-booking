@@ -7,6 +7,18 @@ airline preferences, and the user's chosen priority.
 The bot searches only on owner confirmation or through an owner-activated,
 token-capped price watch. It does **not** invent prices.
 
+## Android and Windows companion app
+
+`client_app/` contains a responsive Flutter application for Android phones and
+Windows computers. It exposes the complete search, baggage, comfort,
+optimization, watch, profile, health, deal, cleanup, chart, and backup feature
+set through a native UI.
+
+The Railway deployment also hosts a bearer-token-protected FastAPI service. Add
+a unique `APP_ACCESS_TOKEN` and generate a public Railway HTTPS domain. The app
+stores only that domain and token; Telegram, RouteStack, and Postgres credentials
+remain server-side. See `client_app/README.md` for setup and installation.
+
 ## Features
 
 - Guided `/search` conversation
@@ -96,6 +108,7 @@ MAX_RESULTS=40
 SEARCH_CACHE_SECONDS=300
 OWNER_TELEGRAM_USER_ID=123456789
 DATABASE_URL=postgresql://...
+APP_ACCESS_TOKEN=replace_with_a_long_random_private_token
 WATCH_DAILY_TOKEN_CAP=10
 WATCH_MAX_ACTIVE=5
 WATCH_MAX_DAYS=60

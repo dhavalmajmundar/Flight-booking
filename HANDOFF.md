@@ -11,7 +11,29 @@ Last updated: 2026-07-22
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 50 automated tests passing
+- Verification: 54 Python tests and 1 Flutter widget test passing; Flutter
+  analysis clean; Android release APK built successfully
+
+## Companion applications
+
+- `client_app/` is one responsive Flutter codebase for Android and Windows.
+- Search exposes every supported route, date, traveler, cabin, currency,
+  flexibility, nearby-airport, baggage, budget, airline, priority, time, stop,
+  red-eye, connection, duration, and search-strategy control.
+- Watches create and manage target/drop/interval/lifetime/weekly-flex monitors
+  and render Postgres price history as a native line chart.
+- Dashboard includes health, usage forecasts, stored deals, cleanup, and private
+  JSON backup. Settings includes every saved profile and quiet-hour default.
+- `flight_bot/api.py` provides the owner-only FastAPI surface. Every `/api/v1`
+  route requires `Authorization: Bearer APP_ACCESS_TOKEN`; the public root only
+  reports service status. Secrets never appear in responses.
+- `flight_bot/main.py` runs the API on Railway's `PORT` beside Telegram long
+  polling, with independent database and RouteStack clients for each event loop.
+- `.github/workflows/build-apps.yml` tests and builds Android and Windows on
+  `main` or manual dispatch. Windows is zipped with its required DLLs/data.
+- Generated binaries live under `client_app/releases/` locally and are ignored
+  by Git; the source, lockfile, platform runners, and reproducible CI stay in Git.
+- Railway needs `APP_ACCESS_TOKEN` and a public HTTPS domain before app login.
 
 ## User experience
 

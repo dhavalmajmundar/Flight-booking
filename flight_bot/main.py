@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import threading
 
 from .bot import build_application
 from .config import Settings
@@ -29,6 +31,7 @@ def configure_logging(settings: Settings) -> None:
                 settings.routestack_api_key,
                 settings.routestack_api_secret,
                 settings.database_url or "",
+                settings.app_access_token or "",
             ),
         )
     )
@@ -45,6 +48,19 @@ def main() -> None:
     settings = Settings.from_env()
     configure_logging(settings)
     application = build_application(settings)
+    from .api import create_api
+    import uvicorn
+
+    api = create_api(settings)
+    port = int(os.getenv("PORT", "8080"))
+    threading.Thread(
+        target=lambda: uvicorn.run(
+            api, host="0.0.0.0", port=port, log_level="info"
+        ),
+        name="flight-app-api",
+        daemon=True,
+    ).start()
+    logging.getLogger(__name__).info("Companion app API listening on port %d", port)
     application.run_polling(allowed_updates=["message", "callback_query"])
 
 

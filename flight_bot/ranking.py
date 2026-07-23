@@ -110,6 +110,12 @@ def rank_flights(
         )
         if request.preferred_airlines.intersection(offer.airline_codes):
             score -= 0.08
+        if request.max_budget is not None and offer.total_price > request.max_budget:
+            score += 0.50
+            offer.warnings.append(
+                f"Exceeds your total budget by {offer.currency} "
+                f"{offer.total_price - request.max_budget:,.2f}"
+            )
         max_leg_stops = max(leg.stops for leg in offer.legs)
         if request.max_stops is not None and max_leg_stops > request.max_stops:
             score += 0.30 * (max_leg_stops - request.max_stops)

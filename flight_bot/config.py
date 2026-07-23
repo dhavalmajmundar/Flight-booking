@@ -21,6 +21,7 @@ class Settings:
     watch_max_active: int = 5
     watch_max_days: int = 60
     watch_digest_hour_utc: int = 13
+    app_access_token: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -72,4 +73,5 @@ class Settings:
             watch_digest_hour_utc=max(
                 0, min(int(os.getenv("WATCH_DIGEST_HOUR_UTC", "13")), 23)
             ),
+            app_access_token=os.getenv("APP_ACCESS_TOKEN", "").strip() or None,
         )

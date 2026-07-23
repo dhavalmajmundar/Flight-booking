@@ -7,3 +7,4 @@ __pycache__/
 Telegram/
 client_app/releases/*.apk
 client_app/releases/*.zip
+client_app/releases/windows-download/

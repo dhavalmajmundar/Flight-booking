@@ -12,7 +12,8 @@ Last updated: 2026-07-22
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
 - Verification: 54 Python tests and 1 Flutter widget test passing; Flutter
-  analysis clean; Android release APK built successfully
+  analysis clean; Android and Windows release builds passed locally/through
+  GitHub Actions run `29972564983`
 
 ## Companion applications
 
@@ -33,6 +34,8 @@ Last updated: 2026-07-22
   `main` or manual dispatch. Windows is zipped with its required DLLs/data.
 - Generated binaries live under `client_app/releases/` locally and are ignored
   by Git; the source, lockfile, platform runners, and reproducible CI stay in Git.
+- Verified personal-install packages: `FlightCompanion-Android.apk` and the full
+  Windows runtime bundle `FlightCompanion-Windows.zip`.
 - Railway needs `APP_ACCESS_TOKEN` and a public HTTPS domain before app login.
 
 ## User experience

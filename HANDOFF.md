@@ -1,6 +1,6 @@
 # Flight Bot Handoff
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 ## Current status
 
@@ -11,33 +11,23 @@ Last updated: 2026-07-22
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 54 Python tests and 1 Flutter widget test passing; Flutter
-  analysis clean; Android and Windows release builds passed locally/through
-  GitHub Actions run `29972564983`
+- Verification: 54 Python tests and 3 Flutter widget tests passing; Flutter
+  analysis clean; refreshed Android release APK built successfully. Windows is
+  rebuilt and verified through GitHub Actions after each completed UI push.
 
-## Paused work in progress — compact desktop UI
+## Compact desktop UI
 
-- Paused at the user's request on 2026-07-22. Do not treat the current Flutter
-  working tree as complete or push it to `main` without finishing verification.
-- Stable remote `main` remains commit `29f88a7`; Railway is running that API and
-  the previously verified companion build is commit `7a17ff2`.
-- Uncommitted changes are intentionally present in:
-  - `client_app/lib/screens/search_screen.dart`
-  - `client_app/lib/screens/settings_screen.dart`
-  - `client_app/test/widget_test.dart`
-- Search was being changed from one tall form to a compact desktop tab layout;
-  Settings was changed to responsive two-column cards. Mobile remains intended
-  to use a touch-friendly single column.
-- Desktop viewport regression tests were added for Search and Settings. Settings
-  passed at a `1179 x 993` content viewport. Search originally failed because
-  its action button was below the viewport; a three-tab replacement was patched
-  immediately before pausing and has not yet been formatted or tested.
-- Resume by running `dart format` on the three Flutter files, then `flutter
-  analyze` and `flutter test`. Adjust the Search tab height/layout until both
-  desktop-fit tests pass, visually verify Windows, rebuild both packages, update
-  this handoff, and only then commit/push.
-- `Flight-Companion/` and the root `FlightCompanion-Windows.zip` are the user's
-  extracted/local Windows installation files. Do not add them to Git.
+- Search keeps route/date controls visible and organizes the remaining options
+  into three fixed-height desktop tabs: Trip preferences, Comfort & price, and
+  Search strategy. The live-search button fits without page scrolling at the
+  application's normal `1179 x 993` content viewport.
+- Settings uses balanced two-column cards on desktop and also fits that viewport
+  without page scrolling.
+- Narrow/mobile screens retain the touch-friendly single-column scrolling form.
+- Regression tests verify Search and Settings fit, every Search tab opens, the
+  expected option groups remain available, and no RenderFlex overflow occurs.
+- The user's extracted `/Flight-Companion/` folder and root Windows ZIP are
+  ignored by Git and must not be committed.
 
 ## Companion applications
 

@@ -264,272 +264,287 @@ class _SearchScreenState extends State<SearchScreen> {
                 ],
               ),
             ),
-            _Section(
-              title: 'Travelers & cabin',
-              icon: Icons.people_outline,
-              child: Wrap(
-                spacing: 14,
-                runSpacing: 14,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _Stepper(
-                    label: 'Adults',
-                    value: adults,
-                    minimum: 1,
-                    maximum: 9,
-                    onChanged: (v) => setState(() => adults = v),
-                  ),
-                  SizedBox(
-                    width: 260,
-                    child: _dropdown('Cabin', cabin, const {
-                      'ECONOMY': 'Economy · default',
-                      'PREMIUM_ECONOMY': 'Premium economy',
-                      'BUSINESS': 'Business',
-                      'FIRST': 'First',
-                    }, (v) => setState(() => cabin = v)),
-                  ),
-                  SizedBox(
-                    width: 190,
-                    child: _dropdown('Currency', currency, const {
-                      'USD': 'USD · default',
-                      'CAD': 'CAD',
-                      'EUR': 'EUR',
-                      'GBP': 'GBP',
-                      'INR': 'INR',
-                    }, (v) => setState(() => currency = v)),
-                  ),
-                ],
-              ),
-            ),
-            _Section(
-              title: 'Dates & nearby airports',
-              icon: Icons.date_range_outlined,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Flexible dates'),
-                    subtitle: const Text(
-                      'Yes is selected by default and can reveal cheaper travel days.',
-                    ),
-                    value: flexible,
-                    onChanged: (v) => setState(() => flexible = v),
-                  ),
-                  if (flexible)
-                    Wrap(
-                      spacing: 8,
-                      children: [1, 2, 3, 5, 7]
-                          .map(
-                            (days) => ChoiceChip(
-                              label: Text(
-                                '±$days day${days == 1 ? '' : 's'}${days == 3 ? ' · default' : ''}',
-                              ),
-                              selected: flexibleDays == days,
-                              onSelected: (_) =>
-                                  setState(() => flexibleDays = days),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: 350,
-                    child: _dropdown('Nearby airports', nearby, const {
-                      'auto': 'Auto: domestic on, international off · default',
-                      'yes': 'Always include',
-                      'no': 'Never include',
-                    }, (v) => setState(() => nearby = v)),
-                  ),
-                ],
-              ),
-            ),
-            _Section(
-              title: 'Baggage',
-              icon: Icons.luggage_outlined,
-              child: Wrap(
-                spacing: 18,
-                runSpacing: 12,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _Stepper(
-                    label: 'Checked bags',
-                    value: checkedBags,
-                    minimum: 0,
-                    maximum: 2,
-                    onChanged: smartBaggage
-                        ? null
-                        : (v) => setState(() => checkedBags = v),
-                  ),
-                  _Stepper(
-                    label: 'Carry-ons',
-                    value: carryOn,
-                    minimum: 0,
-                    maximum: 2,
-                    onChanged: (v) => setState(() => carryOn = v),
-                  ),
-                  FilterChip(
-                    label: const Text(
-                      'Smart checked bags: 0 domestic / 2 international',
-                    ),
-                    selected: smartBaggage,
-                    onSelected: (v) => setState(() => smartBaggage = v),
-                  ),
-                ],
-              ),
-            ),
-            _Section(
-              title: 'Price & airline preferences',
-              icon: Icons.payments_outlined,
-              child: Wrap(
-                spacing: 14,
-                runSpacing: 14,
-                children: [
-                  SizedBox(
-                    width: 250,
-                    child: TextField(
-                      controller: budget,
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        labelText: 'Maximum total budget ($currency)',
-                        hintText: 'No maximum · default',
+            _ResponsiveSectionGrid(
+              children: [
+                _Section(
+                  title: 'Travelers & cabin',
+                  icon: Icons.people_outline,
+                  child: Wrap(
+                    spacing: 14,
+                    runSpacing: 14,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _Stepper(
+                        label: 'Adults',
+                        value: adults,
+                        minimum: 1,
+                        maximum: 9,
+                        onChanged: (v) => setState(() => adults = v),
                       ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 250,
-                    child: TextField(
-                      controller: preferred,
-                      decoration: const InputDecoration(
-                        labelText: 'Preferred airlines',
-                        hintText: 'DL, UA',
+                      SizedBox(
+                        width: 260,
+                        child: _dropdown('Cabin', cabin, const {
+                          'ECONOMY': 'Economy · default',
+                          'PREMIUM_ECONOMY': 'Premium economy',
+                          'BUSINESS': 'Business',
+                          'FIRST': 'First',
+                        }, (v) => setState(() => cabin = v)),
                       ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 250,
-                    child: TextField(
-                      controller: avoided,
-                      decoration: const InputDecoration(
-                        labelText: 'Airlines to avoid',
-                        hintText: 'NK, F9',
+                      SizedBox(
+                        width: 190,
+                        child: _dropdown('Currency', currency, const {
+                          'USD': 'USD · default',
+                          'CAD': 'CAD',
+                          'EUR': 'EUR',
+                          'GBP': 'GBP',
+                          'INR': 'INR',
+                        }, (v) => setState(() => currency = v)),
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            _Section(
-              title: 'Optimization & comfort',
-              icon: Icons.tune_rounded,
-              child: Wrap(
-                spacing: 14,
-                runSpacing: 14,
-                children: [
-                  SizedBox(
-                    width: 230,
-                    child: _dropdown('Sort priority', priority, const {
-                      'cheapest': 'Cheapest',
-                      'balanced': 'Balanced · default',
-                      'fastest': 'Fastest',
-                      'nonstop': 'Nonstop',
-                    }, (v) => setState(() => priority = v)),
+                ),
+                _Section(
+                  title: 'Dates & nearby airports',
+                  icon: Icons.date_range_outlined,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Flexible dates'),
+                        subtitle: const Text(
+                          'Yes is selected by default and can reveal cheaper travel days.',
+                        ),
+                        value: flexible,
+                        onChanged: (v) => setState(() => flexible = v),
+                      ),
+                      if (flexible)
+                        Wrap(
+                          spacing: 8,
+                          children: [1, 2, 3, 5, 7]
+                              .map(
+                                (days) => ChoiceChip(
+                                  label: Text(
+                                    '±$days day${days == 1 ? '' : 's'}${days == 3 ? ' · default' : ''}',
+                                  ),
+                                  selected: flexibleDays == days,
+                                  onSelected: (_) =>
+                                      setState(() => flexibleDays = days),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      const SizedBox(height: 14),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 350),
+                        child: _dropdown('Nearby airports', nearby, const {
+                          'auto':
+                              'Auto: domestic on, international off · default',
+                          'yes': 'Always include',
+                          'no': 'Never include',
+                        }, (v) => setState(() => nearby = v)),
+                      ),
+                    ],
                   ),
-                  SizedBox(
-                    width: 230,
-                    child: _dropdown(
-                      'Outbound departure',
-                      departureWindow,
-                      const {
-                        'any': 'Any time · default',
-                        'morning': 'Morning 5–12',
-                        'afternoon': 'Afternoon 12–17',
-                        'evening': 'Evening 17–22',
-                      },
-                      (v) => setState(() => departureWindow = v),
-                    ),
+                ),
+                _Section(
+                  title: 'Baggage',
+                  icon: Icons.luggage_outlined,
+                  child: Wrap(
+                    spacing: 18,
+                    runSpacing: 12,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _Stepper(
+                        label: 'Checked bags',
+                        value: checkedBags,
+                        minimum: 0,
+                        maximum: 2,
+                        onChanged: smartBaggage
+                            ? null
+                            : (v) => setState(() => checkedBags = v),
+                      ),
+                      _Stepper(
+                        label: 'Carry-ons',
+                        value: carryOn,
+                        minimum: 0,
+                        maximum: 2,
+                        onChanged: (v) => setState(() => carryOn = v),
+                      ),
+                      FilterChip(
+                        label: const Text(
+                          'Smart bags: 0 domestic / 2 international',
+                        ),
+                        selected: smartBaggage,
+                        onSelected: (v) => setState(() => smartBaggage = v),
+                      ),
+                    ],
                   ),
-                  SizedBox(
-                    width: 210,
-                    child: _dropdown<int?>('Maximum stops', maxStops, const {
-                      null: 'Any · default',
-                      0: 'Nonstop',
-                      1: 'Maximum 1',
-                      2: 'Maximum 2',
-                    }, (v) => setState(() => maxStops = v)),
+                ),
+                _Section(
+                  title: 'Price & airline preferences',
+                  icon: Icons.payments_outlined,
+                  child: Wrap(
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: [
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: budget,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                            labelText: 'Maximum total budget ($currency)',
+                            hintText: 'No maximum · default',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: preferred,
+                          decoration: const InputDecoration(
+                            labelText: 'Preferred airlines',
+                            hintText: 'DL, UA',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: avoided,
+                          decoration: const InputDecoration(
+                            labelText: 'Airlines to avoid',
+                            hintText: 'NK, F9',
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  SizedBox(
-                    width: 220,
-                    child: _dropdown<int?>(
-                      'Travel time / direction',
-                      maxDuration,
-                      const {
-                        null: 'No maximum · default',
-                        720: '12 hours',
-                        1080: '18 hours',
-                        1440: '24 hours',
-                        2160: '36 hours',
-                      },
-                      (v) => setState(() => maxDuration = v),
-                    ),
+                ),
+                _Section(
+                  title: 'Optimization & comfort',
+                  icon: Icons.tune_rounded,
+                  child: Wrap(
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: [
+                      SizedBox(
+                        width: 230,
+                        child: _dropdown(
+                          'Sort priority',
+                          priority,
+                          const {
+                            'cheapest': 'Cheapest',
+                            'balanced': 'Balanced · default',
+                            'fastest': 'Fastest',
+                            'nonstop': 'Nonstop',
+                          },
+                          (v) => setState(() => priority = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 230,
+                        child: _dropdown(
+                          'Outbound departure',
+                          departureWindow,
+                          const {
+                            'any': 'Any time · default',
+                            'morning': 'Morning 5–12',
+                            'afternoon': 'Afternoon 12–17',
+                            'evening': 'Evening 17–22',
+                          },
+                          (v) => setState(() => departureWindow = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 210,
+                        child: _dropdown<int?>(
+                          'Maximum stops',
+                          maxStops,
+                          const {
+                            null: 'Any · default',
+                            0: 'Nonstop',
+                            1: 'Maximum 1',
+                            2: 'Maximum 2',
+                          },
+                          (v) => setState(() => maxStops = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 220,
+                        child: _dropdown<int?>(
+                          'Travel time / direction',
+                          maxDuration,
+                          const {
+                            null: 'No maximum · default',
+                            720: '12 hours',
+                            1080: '18 hours',
+                            1440: '24 hours',
+                            2160: '36 hours',
+                          },
+                          (v) => setState(() => maxDuration = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: _dropdown<int>(
+                          'Minimum connection',
+                          minLayover,
+                          const {
+                            45: '45 minutes',
+                            60: '60 minutes · default',
+                            90: '90 minutes',
+                          },
+                          (v) => setState(() => minLayover = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: _dropdown<int>(
+                          'Maximum connection',
+                          maxLayover,
+                          const {
+                            180: '3 hours',
+                            300: '5 hours · default',
+                            360: '6 hours',
+                            480: '8 hours',
+                          },
+                          (v) => setState(() => maxLayover = v),
+                        ),
+                      ),
+                      FilterChip(
+                        label: const Text('Avoid red-eyes · default'),
+                        selected: avoidRedEye,
+                        onSelected: (v) => setState(() => avoidRedEye = v),
+                      ),
+                    ],
                   ),
-                  SizedBox(
-                    width: 240,
-                    child: _dropdown<int>(
-                      'Minimum connection',
-                      minLayover,
-                      const {
-                        45: '45 minutes',
-                        60: '60 minutes · default',
-                        90: '90 minutes',
-                      },
-                      (v) => setState(() => minLayover = v),
-                    ),
+                ),
+                _Section(
+                  title: 'Search strategy',
+                  icon: Icons.speed_rounded,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: 430,
+                        child: _dropdown('Strategy', strategy, const {
+                          'progressive': 'Smart progressive · recommended',
+                          'suggested': 'Suggested date only',
+                          'full': 'Full flexible-date comparison',
+                          'exact': 'Exact date only',
+                        }, (v) => setState(() => strategy = v)),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Maximum disclosed usage: $maximumCalls RouteStack search call(s). Progressive mode stops early when it finds usable results.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ),
-                  SizedBox(
-                    width: 240,
-                    child: _dropdown<int>(
-                      'Maximum connection',
-                      maxLayover,
-                      const {
-                        180: '3 hours',
-                        300: '5 hours · default',
-                        360: '6 hours',
-                        480: '8 hours',
-                      },
-                      (v) => setState(() => maxLayover = v),
-                    ),
-                  ),
-                  FilterChip(
-                    label: const Text('Avoid red-eyes · default'),
-                    selected: avoidRedEye,
-                    onSelected: (v) => setState(() => avoidRedEye = v),
-                  ),
-                ],
-              ),
-            ),
-            _Section(
-              title: 'Search strategy',
-              icon: Icons.speed_rounded,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 430,
-                    child: _dropdown('Strategy', strategy, const {
-                      'progressive': 'Smart progressive · recommended',
-                      'suggested': 'Suggested date only',
-                      'full': 'Full flexible-date comparison',
-                      'exact': 'Exact date only',
-                    }, (v) => setState(() => strategy = v)),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Maximum disclosed usage: $maximumCalls RouteStack search call(s). Progressive mode stops early when it finds usable results.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
             const SizedBox(height: 6),
             FilledButton.icon(
@@ -835,30 +850,90 @@ class _Section extends StatelessWidget {
   final IconData icon;
   final Widget child;
   @override
-  Widget build(BuildContext context) => Card(
-    margin: const EdgeInsets.symmetric(vertical: 8),
-    child: Padding(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+  Widget build(BuildContext context) {
+    final heading = Text(
+      title,
+      style: Theme.of(
+        context,
+      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+    );
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 9),
+                Expanded(child: heading),
+              ],
+            ),
+            const SizedBox(height: 10),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ResponsiveSectionGrid extends StatelessWidget {
+  const _ResponsiveSectionGrid({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      if (constraints.maxWidth < 900) {
+        return Column(children: children);
+      }
+
+      Widget scrollable(Widget child) => SingleChildScrollView(child: child);
+      return DefaultTabController(
+        length: 3,
+        child: SizedBox(
+          height: 420,
+          child: Column(
             children: [
-              Icon(icon, color: Theme.of(context).colorScheme.primary),
-              const SizedBox(width: 9),
-              Text(
-                title,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+              const TabBar(
+                tabs: [
+                  Tab(icon: Icon(Icons.tune), text: 'Trip preferences'),
+                  Tab(
+                    icon: Icon(Icons.airline_seat_recline_extra),
+                    text: 'Comfort & price',
+                  ),
+                  Tab(icon: Icon(Icons.speed), text: 'Search strategy'),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    scrollable(
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: children[0]),
+                          const SizedBox(width: 8),
+                          Expanded(child: children[1]),
+                          const SizedBox(width: 8),
+                          Expanded(child: children[2]),
+                        ],
+                      ),
+                    ),
+                    scrollable(Column(children: [children[3], children[4]])),
+                    scrollable(children[5]),
+                  ],
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          child,
-        ],
-      ),
-    ),
+        ),
+      );
+    },
   );
 }
 

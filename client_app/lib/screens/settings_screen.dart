@@ -121,216 +121,235 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 16),
             if (loading) const LinearProgressIndicator(),
-            _card(
-              'Traveler defaults',
-              Icons.people_outline,
-              Wrap(
-                spacing: 14,
-                runSpacing: 14,
-                children: [
-                  _number(
-                    'Adults',
-                    adults,
-                    1,
-                    9,
-                    (v) => setState(() => adults = v),
-                  ),
-                  SizedBox(
-                    width: 260,
-                    child: drop('Cabin', cabin, const {
-                      'ECONOMY': 'Economy · default',
-                      'PREMIUM_ECONOMY': 'Premium economy',
-                      'BUSINESS': 'Business',
-                      'FIRST': 'First',
-                    }, (v) => setState(() => cabin = v)),
-                  ),
-                  SizedBox(
-                    width: 180,
-                    child: drop('Currency', currency, const {
-                      'USD': 'USD · default',
-                      'CAD': 'CAD',
-                      'EUR': 'EUR',
-                      'GBP': 'GBP',
-                      'INR': 'INR',
-                    }, (v) => setState(() => currency = v)),
-                  ),
-                  _number(
-                    'Checked bags',
-                    checked,
-                    0,
-                    2,
-                    (v) => setState(() => checked = v),
-                  ),
-                  _number(
-                    'Carry-ons',
-                    carry,
-                    0,
-                    2,
-                    (v) => setState(() => carry = v),
-                  ),
-                ],
-              ),
-            ),
-            _card(
-              'Airlines & budget',
-              Icons.payments_outlined,
-              Wrap(
-                spacing: 14,
-                runSpacing: 14,
-                children: [
-                  SizedBox(
-                    width: 270,
-                    child: TextField(
-                      controller: preferred,
-                      decoration: const InputDecoration(
-                        labelText: 'Preferred airline codes',
-                        hintText: 'DL, UA',
+            _SettingsGrid(
+              children: [
+                _card(
+                  'Traveler defaults',
+                  Icons.people_outline,
+                  Wrap(
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: [
+                      _number(
+                        'Adults',
+                        adults,
+                        1,
+                        9,
+                        (v) => setState(() => adults = v),
                       ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 270,
-                    child: TextField(
-                      controller: avoided,
-                      decoration: const InputDecoration(
-                        labelText: 'Airlines to avoid',
-                        hintText: 'NK, F9',
+                      SizedBox(
+                        width: 260,
+                        child: drop('Cabin', cabin, const {
+                          'ECONOMY': 'Economy · default',
+                          'PREMIUM_ECONOMY': 'Premium economy',
+                          'BUSINESS': 'Business',
+                          'FIRST': 'First',
+                        }, (v) => setState(() => cabin = v)),
                       ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 240,
-                    child: TextField(
-                      controller: budget,
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        labelText: 'Default total budget ($currency)',
-                        hintText: 'No maximum',
+                      SizedBox(
+                        width: 180,
+                        child: drop('Currency', currency, const {
+                          'USD': 'USD · default',
+                          'CAD': 'CAD',
+                          'EUR': 'EUR',
+                          'GBP': 'GBP',
+                          'INR': 'INR',
+                        }, (v) => setState(() => currency = v)),
                       ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            _card(
-              'Comfort defaults',
-              Icons.airline_seat_recline_extra_outlined,
-              Wrap(
-                spacing: 14,
-                runSpacing: 14,
-                children: [
-                  SizedBox(
-                    width: 230,
-                    child: drop('Departure window', window, const {
-                      'any': 'Any · default',
-                      'morning': 'Morning',
-                      'afternoon': 'Afternoon',
-                      'evening': 'Evening',
-                    }, (v) => setState(() => window = v)),
-                  ),
-                  SizedBox(
-                    width: 210,
-                    child: drop<int?>('Maximum stops', maxStops, const {
-                      null: 'Any · default',
-                      0: 'Nonstop',
-                      1: 'Maximum 1',
-                      2: 'Maximum 2',
-                    }, (v) => setState(() => maxStops = v)),
-                  ),
-                  SizedBox(
-                    width: 220,
-                    child: drop<int>(
-                      'Minimum layover',
-                      minLayover,
-                      const {
-                        45: '45 minutes',
-                        60: '60 minutes · default',
-                        90: '90 minutes',
-                      },
-                      (v) => setState(() => minLayover = v),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 220,
-                    child: drop<int>(
-                      'Maximum layover',
-                      maxLayover,
-                      const {
-                        180: '3 hours',
-                        300: '5 hours · default',
-                        360: '6 hours',
-                        480: '8 hours',
-                      },
-                      (v) => setState(() => maxLayover = v),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 230,
-                    child: drop<int?>(
-                      'Max time/direction',
-                      maxDuration,
-                      const {
-                        null: 'No maximum · default',
-                        720: '12 hours',
-                        1080: '18 hours',
-                        1440: '24 hours',
-                        2160: '36 hours',
-                      },
-                      (v) => setState(() => maxDuration = v),
-                    ),
-                  ),
-                  FilterChip(
-                    label: const Text('Avoid red-eyes · default'),
-                    selected: avoidRedEye,
-                    onSelected: (v) => setState(() => avoidRedEye = v),
-                  ),
-                ],
-              ),
-            ),
-            _card(
-              'Notifications',
-              Icons.bedtime_outlined,
-              Wrap(
-                spacing: 14,
-                runSpacing: 14,
-                children: [
-                  SizedBox(
-                    width: 300,
-                    child: TextField(
-                      controller: timezone,
-                      decoration: const InputDecoration(
-                        labelText: 'IANA timezone',
-                        hintText: 'America/New_York',
+                      _number(
+                        'Checked bags',
+                        checked,
+                        0,
+                        2,
+                        (v) => setState(() => checked = v),
                       ),
-                    ),
+                      _number(
+                        'Carry-ons',
+                        carry,
+                        0,
+                        2,
+                        (v) => setState(() => carry = v),
+                      ),
+                    ],
                   ),
-                  SizedBox(
-                    width: 190,
-                    child: drop<int>(
-                      'Quiet hours start',
-                      quietStart,
-                      {
-                        for (var i = 0; i < 24; i++)
-                          i: '${i.toString().padLeft(2, '0')}:00${i == 22 ? ' · default' : ''}',
-                      },
-                      (v) => setState(() => quietStart = v),
-                    ),
+                ),
+                _card(
+                  'Airlines & budget',
+                  Icons.payments_outlined,
+                  Wrap(
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: [
+                      SizedBox(
+                        width: 270,
+                        child: TextField(
+                          controller: preferred,
+                          decoration: const InputDecoration(
+                            labelText: 'Preferred airline codes',
+                            hintText: 'DL, UA',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 270,
+                        child: TextField(
+                          controller: avoided,
+                          decoration: const InputDecoration(
+                            labelText: 'Airlines to avoid',
+                            hintText: 'NK, F9',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          controller: budget,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                            labelText: 'Default total budget ($currency)',
+                            hintText: 'No maximum',
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  SizedBox(
-                    width: 190,
-                    child: drop<int>('Quiet hours end', quietEnd, {
-                      for (var i = 0; i < 24; i++)
-                        i: '${i.toString().padLeft(2, '0')}:00${i == 7 ? ' · default' : ''}',
-                    }, (v) => setState(() => quietEnd = v)),
+                ),
+                _card(
+                  'Comfort defaults',
+                  Icons.airline_seat_recline_extra_outlined,
+                  Wrap(
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: [
+                      SizedBox(
+                        width: 230,
+                        child: drop(
+                          'Departure window',
+                          window,
+                          const {
+                            'any': 'Any · default',
+                            'morning': 'Morning',
+                            'afternoon': 'Afternoon',
+                            'evening': 'Evening',
+                          },
+                          (v) => setState(() => window = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 210,
+                        child: drop<int?>(
+                          'Maximum stops',
+                          maxStops,
+                          const {
+                            null: 'Any · default',
+                            0: 'Nonstop',
+                            1: 'Maximum 1',
+                            2: 'Maximum 2',
+                          },
+                          (v) => setState(() => maxStops = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 220,
+                        child: drop<int>(
+                          'Minimum layover',
+                          minLayover,
+                          const {
+                            45: '45 minutes',
+                            60: '60 minutes · default',
+                            90: '90 minutes',
+                          },
+                          (v) => setState(() => minLayover = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 220,
+                        child: drop<int>(
+                          'Maximum layover',
+                          maxLayover,
+                          const {
+                            180: '3 hours',
+                            300: '5 hours · default',
+                            360: '6 hours',
+                            480: '8 hours',
+                          },
+                          (v) => setState(() => maxLayover = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 230,
+                        child: drop<int?>(
+                          'Max time/direction',
+                          maxDuration,
+                          const {
+                            null: 'No maximum · default',
+                            720: '12 hours',
+                            1080: '18 hours',
+                            1440: '24 hours',
+                            2160: '36 hours',
+                          },
+                          (v) => setState(() => maxDuration = v),
+                        ),
+                      ),
+                      FilterChip(
+                        label: const Text('Avoid red-eyes · default'),
+                        selected: avoidRedEye,
+                        onSelected: (v) => setState(() => avoidRedEye = v),
+                      ),
+                    ],
                   ),
-                  const SizedBox(
-                    width: 400,
-                    child: Text(
-                      'Nonurgent watch checks are deferred before consuming a call. Near-departure and near-target watches remain urgent.',
-                    ),
+                ),
+                _card(
+                  'Notifications',
+                  Icons.bedtime_outlined,
+                  Wrap(
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: [
+                      SizedBox(
+                        width: 300,
+                        child: TextField(
+                          controller: timezone,
+                          decoration: const InputDecoration(
+                            labelText: 'IANA timezone',
+                            hintText: 'America/New_York',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 190,
+                        child: drop<int>(
+                          'Quiet hours start',
+                          quietStart,
+                          {
+                            for (var i = 0; i < 24; i++)
+                              i: '${i.toString().padLeft(2, '0')}:00${i == 22 ? ' · default' : ''}',
+                          },
+                          (v) => setState(() => quietStart = v),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 190,
+                        child: drop<int>(
+                          'Quiet hours end',
+                          quietEnd,
+                          {
+                            for (var i = 0; i < 24; i++)
+                              i: '${i.toString().padLeft(2, '0')}:00${i == 7 ? ' · default' : ''}',
+                          },
+                          (v) => setState(() => quietEnd = v),
+                        ),
+                      ),
+                      const SizedBox(
+                        width: 400,
+                        child: Text(
+                          'Nonurgent watch checks are deferred before consuming a call. Near-departure and near-target watches remain urgent.',
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
             FilledButton.icon(
               onPressed: loading || saving ? null : save,
@@ -367,9 +386,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   );
 
   Widget _card(String title, IconData icon, Widget child) => Card(
-    margin: const EdgeInsets.symmetric(vertical: 8),
+    margin: const EdgeInsets.symmetric(vertical: 5),
     child: Padding(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -385,7 +404,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 10),
           child,
         ],
       ),
@@ -487,4 +506,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+}
+
+class _SettingsGrid extends StatelessWidget {
+  const _SettingsGrid({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      if (constraints.maxWidth < 850) {
+        return Column(children: children);
+      }
+
+      final left = <Widget>[];
+      final right = <Widget>[];
+      for (var index = 0; index < children.length; index++) {
+        (index.isEven ? left : right).add(children[index]);
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: Column(children: left)),
+          const SizedBox(width: 12),
+          Expanded(child: Column(children: right)),
+        ],
+      );
+    },
+  );
 }

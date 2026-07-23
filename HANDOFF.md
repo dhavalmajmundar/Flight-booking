@@ -12,8 +12,8 @@ Last updated: 2026-07-23
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
 - Verification: 54 Python tests and 3 Flutter widget tests passing; Flutter
-  analysis clean; refreshed Android release APK built successfully. Windows is
-  rebuilt and verified through GitHub Actions after each completed UI push.
+  analysis clean; Android and Windows release jobs passed in GitHub Actions run
+  `30046931609` for compact-UI source commit `d698f79`.
 
 ## Compact desktop UI
 
@@ -26,6 +26,11 @@ Last updated: 2026-07-23
 - Narrow/mobile screens retain the touch-friendly single-column scrolling form.
 - Regression tests verify Search and Settings fit, every Search tab opens, the
   expected option groups remain available, and no RenderFlex overflow occurs.
+- Refreshed local packages:
+  - Android `FlightCompanion-Android.apk` SHA-256
+    `663FB3E767053AE469D45A3159975BC162D73F8F5BFC07DA2DB67E232FF52201`
+  - Windows `FlightCompanion-Windows.zip` SHA-256
+    `C6C32FC0CF567458F0D4EDDDEF46C3AE96E2A080C7B158F9E92752D5F8C2059E`
 - The user's extracted `/Flight-Companion/` folder and root Windows ZIP are
   ignored by Git and must not be committed.
 

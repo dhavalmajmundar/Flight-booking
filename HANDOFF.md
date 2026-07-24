@@ -15,6 +15,17 @@ Last updated: 2026-07-23
   analysis clean; Android and Windows release jobs passed in GitHub Actions run
   `30046931609` for compact-UI source commit `d698f79`.
 
+## Current user checkpoint
+
+- Railway API connection is configured and confirmed running.
+- The original Windows app was extracted to the ignored local
+  `/Flight-Companion/` folder and successfully connected to Railway.
+- Refreshed compact-layout packages are ready under `client_app/releases/`.
+- Next guided step: close the running Windows app, replace the contents of the
+  extracted `/Flight-Companion/` folder with the refreshed Windows ZIP contents,
+  then launch `FlightCompanion.exe` and visually confirm Search and Settings.
+- Continue installation guidance one step at a time, as requested by the user.
+
 ## Compact desktop UI
 
 - Search keeps route/date controls visible and organizes the remaining options

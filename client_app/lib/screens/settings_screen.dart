@@ -16,6 +16,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final preferred = TextEditingController(),
       avoided = TextEditingController(),
+      requiredAirlines = TextEditingController(),
       budget = TextEditingController(),
       timezone = TextEditingController();
   bool loading = true, saving = false, avoidRedEye = true;
@@ -53,6 +54,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       quietEnd = p['quiet_end_hour'] ?? 7;
       preferred.text = (p['preferred_airlines'] as List? ?? []).join(', ');
       avoided.text = (p['avoided_airlines'] as List? ?? []).join(', ');
+      requiredAirlines.text = (p['required_airlines'] as List? ?? []).join(
+        ', ',
+      );
       budget.text = p['max_budget']?.toString() ?? '';
       timezone.text = p['timezone'] ?? 'America/New_York';
     } catch (e) {
@@ -76,6 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await widget.api.put('/profile', {
         'preferred_airlines': codes(preferred.text),
         'avoided_airlines': codes(avoided.text),
+        'required_airlines': codes(requiredAirlines.text),
         'max_budget': double.tryParse(budget.text),
         'max_layover_minutes': maxLayover,
         'adults': adults,
@@ -181,7 +186,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     runSpacing: 14,
                     children: [
                       SizedBox(
-                        width: 270,
+                        width: 210,
+                        child: TextField(
+                          controller: requiredAirlines,
+                          decoration: const InputDecoration(
+                            labelText: 'Only these airline codes',
+                            hintText: 'DL, UA · optional',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 210,
                         child: TextField(
                           controller: preferred,
                           decoration: const InputDecoration(
@@ -191,7 +206,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       SizedBox(
-                        width: 270,
+                        width: 210,
                         child: TextField(
                           controller: avoided,
                           decoration: const InputDecoration(
@@ -201,7 +216,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                       ),
                       SizedBox(
-                        width: 240,
+                        width: 210,
                         child: TextField(
                           controller: budget,
                           keyboardType: TextInputType.number,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../api_client.dart';
+import '../widgets/airport_field.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key, required this.api});
@@ -14,6 +15,7 @@ class _SearchScreenState extends State<SearchScreen> {
   final destination = TextEditingController();
   final preferred = TextEditingController();
   final avoided = TextEditingController();
+  final requiredAirlines = TextEditingController();
   final budget = TextEditingController();
   DateTime departure = DateTime.now().add(const Duration(days: 30));
   DateTime? returning = DateTime.now().add(const Duration(days: 37));
@@ -50,6 +52,7 @@ class _SearchScreenState extends State<SearchScreen> {
     'smart_baggage': smartBaggage,
     'preferred_airlines': _codes(preferred.text),
     'avoided_airlines': _codes(avoided.text),
+    'required_airlines': _codes(requiredAirlines.text),
     'max_budget': double.tryParse(budget.text.replaceAll(',', '')),
     'priority': priority,
     'currency': currency,
@@ -158,19 +161,17 @@ class _SearchScreenState extends State<SearchScreen> {
                 children: [
                   LayoutBuilder(
                     builder: (context, size) {
-                      final fromField = TextField(
+                      final fromField = AirportField(
+                        api: widget.api,
                         controller: origin,
-                        decoration: const InputDecoration(
-                          labelText: 'From city or airport',
-                          prefixIcon: Icon(Icons.flight_takeoff),
-                        ),
+                        labelText: 'From city or airport',
+                        prefixIcon: Icons.flight_takeoff,
                       );
-                      final toField = TextField(
+                      final toField = AirportField(
+                        api: widget.api,
                         controller: destination,
-                        decoration: const InputDecoration(
-                          labelText: 'To city or airport',
-                          prefixIcon: Icon(Icons.flight_land),
-                        ),
+                        labelText: 'To city or airport',
+                        prefixIcon: Icons.flight_land,
                       );
                       final swap = IconButton(
                         onPressed: () {
@@ -396,6 +397,17 @@ class _SearchScreenState extends State<SearchScreen> {
                           decoration: InputDecoration(
                             labelText: 'Maximum total budget ($currency)',
                             hintText: 'No maximum · default',
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 250,
+                        child: TextField(
+                          controller: requiredAirlines,
+                          decoration: const InputDecoration(
+                            labelText: 'Only these airlines',
+                            hintText: 'DL, UA · optional',
+                            helperText: 'Show trips containing any listed code',
                           ),
                         ),
                       ),

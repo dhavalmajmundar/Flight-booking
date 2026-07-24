@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
@@ -43,6 +43,7 @@ class UserProfile:
     avoided_airlines: set[str]
     max_budget: float | None
     max_layover_minutes: int
+    required_airlines: set[str] = field(default_factory=set)
     adults: int = 4
     cabin: Cabin = Cabin.ECONOMY
     checked_bags: int = 2
@@ -88,6 +89,7 @@ def request_to_json(request: SearchRequest) -> str:
         "auto_nearby": request.auto_nearby,
         "preferred_airlines": sorted(request.preferred_airlines),
         "avoided_airlines": sorted(request.avoided_airlines),
+        "required_airlines": sorted(request.required_airlines),
         "max_budget": request.max_budget,
         "priority": request.priority.value,
         "currency": request.currency,
@@ -116,6 +118,7 @@ def request_from_json(raw: str | dict[str, Any]) -> SearchRequest:
     )
     payload["preferred_airlines"] = set(payload.get("preferred_airlines", []))
     payload["avoided_airlines"] = set(payload.get("avoided_airlines", []))
+    payload["required_airlines"] = set(payload.get("required_airlines", []))
     payload.setdefault("max_layover_minutes", 300)
     payload.setdefault("flexible_days", 3)
     payload.setdefault("min_layover_minutes", 60)
@@ -212,6 +215,7 @@ class WatchStore:
                 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York';
                 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS quiet_start_hour INTEGER NOT NULL DEFAULT 22;
                 ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS quiet_end_hour INTEGER NOT NULL DEFAULT 7;
+                ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS required_airlines TEXT[] NOT NULL DEFAULT '{}';
 
                 CREATE TABLE IF NOT EXISTS recent_searches (
                     id BIGSERIAL PRIMARY KEY,
@@ -678,6 +682,7 @@ class WatchStore:
         return UserProfile(
             preferred_airlines=set(row["preferred_airlines"] or []),
             avoided_airlines=set(row["avoided_airlines"] or []),
+            required_airlines=set(row["required_airlines"] or []),
             max_budget=(
                 float(row["max_budget"])
                 if row["max_budget"] is not None
@@ -705,15 +710,16 @@ class WatchStore:
         await self._require_pool().execute(
             """
             INSERT INTO user_profiles (
-                user_id, preferred_airlines, avoided_airlines,
+                user_id, preferred_airlines, avoided_airlines, required_airlines,
                 max_budget, max_layover_minutes, adults, cabin, checked_bags,
                 carry_on_bags, currency, departure_window, avoid_red_eye,
                 max_stops, min_layover_minutes, max_total_duration_minutes,
                 timezone, quiet_start_hour, quiet_end_hour
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
             ON CONFLICT (user_id) DO UPDATE SET
                 preferred_airlines=EXCLUDED.preferred_airlines,
                 avoided_airlines=EXCLUDED.avoided_airlines,
+                required_airlines=EXCLUDED.required_airlines,
                 max_budget=EXCLUDED.max_budget,
                 max_layover_minutes=EXCLUDED.max_layover_minutes,
                 adults=EXCLUDED.adults, cabin=EXCLUDED.cabin,
@@ -733,6 +739,7 @@ class WatchStore:
             user_id,
             sorted(profile.preferred_airlines),
             sorted(profile.avoided_airlines),
+            sorted(profile.required_airlines),
             profile.max_budget,
             profile.max_layover_minutes,
             profile.adults,
@@ -777,6 +784,7 @@ class WatchStore:
             "profile": {
                 "preferred_airlines": sorted(profile.preferred_airlines),
                 "avoided_airlines": sorted(profile.avoided_airlines),
+                "required_airlines": sorted(profile.required_airlines),
                 "max_budget": profile.max_budget,
                 "currency": profile.currency,
                 "timezone": profile.timezone,

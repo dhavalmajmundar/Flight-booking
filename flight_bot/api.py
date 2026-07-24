@@ -37,6 +37,7 @@ class TripPayload(BaseModel):
     smart_baggage: bool = False
     preferred_airlines: list[str] = Field(default_factory=list)
     avoided_airlines: list[str] = Field(default_factory=list)
+    required_airlines: list[str] = Field(default_factory=list)
     max_budget: float | None = Field(default=None, gt=0)
     priority: Priority = Priority.BALANCED
     currency: Literal["USD", "CAD", "EUR", "GBP", "INR"] = "USD"
@@ -63,6 +64,7 @@ class TripPayload(BaseModel):
             auto_baggage=self.smart_baggage,
             preferred_airlines={value.upper() for value in self.preferred_airlines},
             avoided_airlines={value.upper() for value in self.avoided_airlines},
+            required_airlines={value.upper() for value in self.required_airlines},
             max_budget=self.max_budget, priority=self.priority, currency=self.currency,
             departure_window=self.departure_window, avoid_red_eye=self.avoid_red_eye,
             max_stops=self.max_stops, min_layover_minutes=self.min_layover_minutes,
@@ -91,6 +93,7 @@ class WatchUpdatePayload(BaseModel):
 class ProfilePayload(BaseModel):
     preferred_airlines: list[str] = Field(default_factory=list)
     avoided_airlines: list[str] = Field(default_factory=list)
+    required_airlines: list[str] = Field(default_factory=list)
     max_budget: float | None = Field(default=None, gt=0)
     max_layover_minutes: int = Field(default=300, ge=60, le=720)
     adults: int = Field(default=4, ge=1, le=9)
@@ -122,6 +125,7 @@ def _watch_json(watch: Watch) -> dict[str, Any]:
         "last_checked_at": watch.last_checked_at.isoformat() if watch.last_checked_at else None,
         "last_price": watch.last_price, "record_low": watch.record_low,
         "weekly_flex": watch.weekly_flex,
+        "required_airlines": sorted(request.required_airlines),
         "consecutive_failures": watch.consecutive_failures,
     }
 
@@ -288,6 +292,7 @@ def create_api(settings: Settings) -> FastAPI:
         value["departure_window"] = profile.departure_window.value
         value["preferred_airlines"] = sorted(profile.preferred_airlines)
         value["avoided_airlines"] = sorted(profile.avoided_airlines)
+        value["required_airlines"] = sorted(profile.required_airlines)
         return value
 
     @app.put("/api/v1/profile", dependencies=[Depends(authorize)])
@@ -297,6 +302,7 @@ def create_api(settings: Settings) -> FastAPI:
         profile = UserProfile(
             preferred_airlines={value.upper() for value in payload.preferred_airlines},
             avoided_airlines={value.upper() for value in payload.avoided_airlines},
+            required_airlines={value.upper() for value in payload.required_airlines},
             max_budget=payload.max_budget, max_layover_minutes=payload.max_layover_minutes,
             adults=payload.adults, cabin=payload.cabin, checked_bags=payload.checked_bags,
             carry_on_bags=payload.carry_on_bags, currency=payload.currency,

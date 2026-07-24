@@ -13,6 +13,28 @@ def _iata_airports() -> dict[str, dict[str, Any]]:
     return airportsdata.load("IATA")
 
 
+def _airport_label(code: str, airport: dict[str, Any]) -> str:
+    """Build a human-readable airport label from the bundled IATA database."""
+    name = re.sub(
+        r"(?<=\w)/(?=\w)",
+        " ",
+        str(airport.get("name") or code).strip(),
+    )
+    parts = [
+        name,
+        str(airport.get("city") or "").strip(),
+        str(airport.get("subd") or "").strip(),
+        str(airport.get("country") or "").strip().upper(),
+    ]
+    unique_parts: list[str] = []
+    for part in parts:
+        if part and part.casefold() not in {
+            existing.casefold() for existing in unique_parts
+        }:
+            unique_parts.append(part)
+    return f"[{code}] {', '.join(unique_parts)}"
+
+
 def local_airport(query: str) -> tuple[str, str, str] | None:
     """Resolve an exact IATA airport code without making a provider call."""
     code = query.strip().upper()
@@ -21,12 +43,8 @@ def local_airport(query: str) -> tuple[str, str, str] | None:
     airport = _iata_airports().get(code)
     if not airport:
         return None
-    name = str(airport.get("name") or code)
-    city = str(airport.get("city") or "").strip()
     country = str(airport.get("country") or "").strip().upper()
-    place = ", ".join(part for part in (city, country) if part)
-    label = f"[{code}] {name}" + (f", {place}" if place else "")
-    return code, label, country
+    return code, _airport_label(code, airport), country
 
 
 def _distance_km(
@@ -151,13 +169,10 @@ def local_airport_suggestions(
             airport = _iata_airports().get(code)
             if not airport:
                 continue
-            name = str(airport.get("name") or code)
-            airport_city = str(airport.get("city") or "").strip()
-            subdivision = str(airport.get("subd") or "").strip()
             results.append(
                 (
                     code,
-                    f"[{code}] {name}, {airport_city}, {subdivision}".rstrip(", "),
+                    _airport_label(code, airport),
                     str(airport.get("country") or "").upper(),
                 )
             )
@@ -207,11 +222,11 @@ def local_airport_suggestions(
     )
     results: list[tuple[str, str, str]] = []
     for _, code, airport in nearby:
-        name = str(airport.get("name") or code)
-        airport_city = str(airport.get("city") or "").strip()
-        subdivision = str(airport.get("subd") or "").strip()
-        label = f"[{code}] {name}, {airport_city}, {subdivision}".rstrip(", ")
-        value = (code, label, str(airport.get("country") or "").upper())
+        value = (
+            code,
+            _airport_label(code, airport),
+            str(airport.get("country") or "").upper(),
+        )
         if value not in results:
             results.append(value)
         if len(results) >= limit:

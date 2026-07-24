@@ -337,6 +337,7 @@ async def begin_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                 max_total_duration_minutes=profile.max_total_duration_minutes,
                 preferred_airlines=set(profile.preferred_airlines),
                 avoided_airlines=set(profile.avoided_airlines),
+                required_airlines=set(profile.required_airlines),
                 max_budget=profile.max_budget,
             )
         except Exception:
@@ -603,6 +604,7 @@ async def _apply_saved_profile(
         trip["preferred_airlines"] = set(profile.preferred_airlines)
     if not _profile_option_present(args, "--avoid"):
         trip["avoided_airlines"] = set(profile.avoided_airlines)
+    trip["required_airlines"] = set(profile.required_airlines)
     if not _profile_option_present(args, "--budget"):
         trip["max_budget"] = profile.max_budget
     if not _profile_option_present(args, "--max-layover"):

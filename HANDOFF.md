@@ -11,9 +11,9 @@ Last updated: 2026-07-23
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 54 Python tests and 3 Flutter widget tests passing; Flutter
-  analysis clean; Android and Windows release jobs passed in GitHub Actions run
-  `30046931609` for compact-UI source commit `d698f79`.
+- Verification: 58 Python tests and 4 Flutter widget tests passing; Python
+  compile and Flutter analysis clean. Refreshed Android release APK built
+  locally; the matching Windows package is rebuilt by GitHub Actions after push.
 
 ## Current user checkpoint
 
@@ -25,6 +25,26 @@ Last updated: 2026-07-23
   extracted `/Flight-Companion/` folder with the refreshed Windows ZIP contents,
   then launch `FlightCompanion.exe` and visually confirm Search and Settings.
 - Continue installation guidance one step at a time, as requested by the user.
+
+## Airport and airline helpers
+
+- Search and Watch route fields use the bundled `airportsdata` IATA database
+  through the owner-authenticated Railway API. Typing an exact code such as
+  `CLT` displays `[CLT] Charlotte Douglas International Airport, Charlotte,
+  North Carolina, US`; city/state text shows selectable nearby suggestions.
+- Airport lookups are debounced and cached in the app. They use no RouteStack
+  search token and repeated queries do not make another Railway request during
+  that app session.
+- Search exposes three different airline controls:
+  - Only these airlines: a strict result filter; multiple codes match any listed
+    airline present in an itinerary.
+  - Preferred airlines: ranking boost without hiding other results.
+  - Airlines to avoid: the existing avoidance preference.
+- The strict airline filter persists in PostgreSQL profile defaults, applies to
+  live searches and saved watches, survives watch JSON serialization, and is
+  included in private data export.
+- PostgreSQL startup migration adds `user_profiles.required_airlines` safely
+  with an empty-array default for existing Railway databases.
 
 ## Compact desktop UI
 
@@ -39,7 +59,7 @@ Last updated: 2026-07-23
   expected option groups remain available, and no RenderFlex overflow occurs.
 - Refreshed local packages:
   - Android `FlightCompanion-Android.apk` SHA-256
-    `663FB3E767053AE469D45A3159975BC162D73F8F5BFC07DA2DB67E232FF52201`
+    `32391B8FE94B970CCF8712B84338E1B869B53024FDBFF1D569C240C5114DDF7A`
   - Windows `FlightCompanion-Windows.zip` SHA-256
     `C6C32FC0CF567458F0D4EDDDEF46C3AE96E2A080C7B158F9E92752D5F8C2059E`
 - The user's extracted `/Flight-Companion/` folder and root Windows ZIP are

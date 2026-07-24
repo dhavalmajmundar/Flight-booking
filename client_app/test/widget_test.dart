@@ -4,13 +4,25 @@ import 'package:flight_companion/api_client.dart';
 import 'package:flight_companion/main.dart';
 import 'package:flight_companion/screens/search_screen.dart';
 import 'package:flight_companion/screens/settings_screen.dart';
+import 'package:flight_companion/widgets/airport_field.dart';
 
 class _FakeApi extends FlightApi {
   _FakeApi() : super(baseUrl: 'https://example.test', token: 'test-token');
 
   @override
-  Future<dynamic> get(String path, [Map<String, String>? query]) async =>
-      <String, dynamic>{};
+  Future<dynamic> get(String path, [Map<String, String>? query]) async {
+    if (path == '/airports' && query?['q']?.toUpperCase() == 'CLT') {
+      return [
+        {
+          'code': 'CLT',
+          'label':
+              '[CLT] Charlotte Douglas International Airport, Charlotte, North Carolina, US',
+          'country': 'US',
+        },
+      ];
+    }
+    return <String, dynamic>{};
+  }
 }
 
 void main() {
@@ -20,6 +32,37 @@ void main() {
     );
     expect(find.text('Connect Flight Companion'), findsOneWidget);
     expect(find.text('Save secure connection'), findsOneWidget);
+  });
+
+  testWidgets('expands an IATA code to its full airport location', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AirportField(
+            api: _FakeApi(),
+            controller: controller,
+            labelText: 'From city or airport',
+            prefixIcon: Icons.flight_takeoff,
+          ),
+        ),
+      ),
+    );
+
+    await tester.enterText(find.byType(TextField), 'CLT');
+    await tester.pump(const Duration(milliseconds: 350));
+    await tester.pump();
+
+    expect(
+      find.text(
+        '[CLT] Charlotte Douglas International Airport, Charlotte, North Carolina, US',
+      ),
+      findsOneWidget,
+    );
+    expect(controller.text, 'CLT');
   });
 
   testWidgets('desktop search fits without scrolling', (tester) async {

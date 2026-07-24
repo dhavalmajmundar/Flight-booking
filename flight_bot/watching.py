@@ -548,6 +548,7 @@ async def watch_weekly(update: Update, context) -> int:
             carry_on_bags=profile.carry_on_bags,
             preferred_airlines=set(profile.preferred_airlines),
             avoided_airlines=set(profile.avoided_airlines),
+            required_airlines=set(profile.required_airlines),
             currency=profile.currency,
             departure_window=profile.departure_window,
             avoid_red_eye=profile.avoid_red_eye,

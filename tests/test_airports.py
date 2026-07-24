@@ -52,3 +52,13 @@ def test_exact_iata_resolution_does_not_call_provider() -> None:
     assert alternatives == []
     assert country == "US"
     asyncio.run(client.close())
+
+
+def test_exact_iata_label_includes_full_city_and_subdivision() -> None:
+    clt = local_airport("CLT")
+    assert clt
+    assert clt[0] == "CLT"
+    assert "Charlotte Douglas International Airport" in clt[1]
+    assert "Charlotte" in clt[1]
+    assert "North Carolina" in clt[1]
+    assert clt[2] == "US"

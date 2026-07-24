@@ -33,6 +33,25 @@ def test_api_rejects_missing_owner_bearer_token() -> None:
     assert response.status_code == 401
 
 
+def test_airport_api_expands_exact_iata_code_without_provider_call() -> None:
+    with TestClient(create_api(settings())) as client:
+        response = client.get(
+            "/api/v1/airports?q=CLT",
+            headers={"Authorization": "Bearer a-long-private-app-token"},
+        )
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "code": "CLT",
+            "label": (
+                "[CLT] Charlotte Douglas International Airport, Charlotte, "
+                "North Carolina, US"
+            ),
+            "country": "US",
+        }
+    ]
+
+
 def test_trip_payload_maps_every_safe_default() -> None:
     payload = TripPayload(
         origin="JFK",
@@ -49,3 +68,13 @@ def test_trip_payload_maps_every_safe_default() -> None:
     assert request.checked_bags == 2
     assert request.carry_on_bags == 1
     assert request.avoid_red_eye is True
+
+
+def test_trip_payload_maps_required_airlines() -> None:
+    payload = TripPayload(
+        origin="CLT",
+        destination="LAX",
+        departure_date=date(2026, 9, 15),
+        required_airlines=["aa", "DL"],
+    )
+    assert payload.request().required_airlines == {"AA", "DL"}

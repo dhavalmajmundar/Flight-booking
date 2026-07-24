@@ -8,11 +8,17 @@ from flight_bot.ranking import (
 )
 
 
-def option(identifier: str, price: float, minutes: int, stops: int) -> FlightOption:
+def option(
+    identifier: str,
+    price: float,
+    minutes: int,
+    stops: int,
+    airline_code: str = "TA",
+) -> FlightOption:
     return FlightOption(
         offer_id=identifier,
         airlines=("Test Air",),
-        airline_codes=("TA",),
+        airline_codes=(airline_code,),
         legs=(
             Leg(
                 origin="JFK",
@@ -89,6 +95,19 @@ def test_cheapest_priority_favors_price() -> None:
     result = rank_flights([cheap, expensive], request(Priority.CHEAPEST))
     assert result is not None
     assert result.best_overall is cheap
+
+
+def test_required_airlines_only_returns_matching_itineraries() -> None:
+    delta = option("delta", 220, 330, 0, "DL")
+    united = option("united", 180, 320, 0, "UA")
+    search = request()
+    search.required_airlines = {"DL"}
+    result = rank_flights([delta, united], search)
+    assert result is not None
+    assert result.ordered == [delta]
+
+    search.required_airlines = {"AA"}
+    assert rank_flights([delta, united], search) is None
 
 
 def test_cheapest_travel_date_uses_daily_lowest_fares() -> None:

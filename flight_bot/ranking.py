@@ -85,6 +85,13 @@ def observed_deal_label(
 def rank_flights(
     offers: list[FlightOption], request: SearchRequest
 ) -> RankedResults | None:
+    if request.required_airlines:
+        required = {code.upper() for code in request.required_airlines}
+        offers = [
+            offer
+            for offer in offers
+            if required.intersection(code.upper() for code in offer.airline_codes)
+        ]
     if not offers:
         return None
 

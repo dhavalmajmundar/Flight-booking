@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../api_client.dart';
+import '../widgets/airport_field.dart';
 
 class WatchesScreen extends StatefulWidget {
   const WatchesScreen({super.key, required this.api});
@@ -327,11 +328,20 @@ class _WatchDialog extends StatefulWidget {
 class _WatchDialogState extends State<_WatchDialog> {
   final origin = TextEditingController(),
       destination = TextEditingController(),
+      requiredAirlines = TextEditingController(),
       target = TextEditingController();
   DateTime departure = DateTime.now().add(const Duration(days: 45));
   bool roundTrip = true, weekly = false, saving = false;
   int tripDays = 7, drop = 5, interval = 24, lifetime = 30;
   String date(DateTime value) => value.toIso8601String().split('T').first;
+
+  @override
+  void initState() {
+    super.initState();
+    requiredAirlines.text = (widget.profile['required_airlines'] as List? ?? [])
+        .join(', ');
+  }
+
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: const Text('Create price watch'),
@@ -345,17 +355,27 @@ class _WatchDialogState extends State<_WatchDialog> {
               'Setup uses no RouteStack call. The baseline is queued only after confirmation.',
             ),
             const SizedBox(height: 14),
-            TextField(
+            AirportField(
+              api: widget.api,
               controller: origin,
-              decoration: const InputDecoration(
-                labelText: 'From city or airport',
-              ),
+              labelText: 'From city or airport',
+              prefixIcon: Icons.flight_takeoff,
+            ),
+            const SizedBox(height: 10),
+            AirportField(
+              api: widget.api,
+              controller: destination,
+              labelText: 'To city or airport',
+              prefixIcon: Icons.flight_land,
             ),
             const SizedBox(height: 10),
             TextField(
-              controller: destination,
+              controller: requiredAirlines,
+              textCapitalization: TextCapitalization.characters,
               decoration: const InputDecoration(
-                labelText: 'To city or airport',
+                labelText: 'Only these airlines',
+                hintText: 'DL, UA · optional',
+                helperText: 'Watch trips containing any listed airline code',
               ),
             ),
             const SizedBox(height: 10),
@@ -491,6 +511,11 @@ class _WatchDialogState extends State<_WatchDialog> {
       'carry_on_bags': p['carry_on_bags'] ?? 1,
       'preferred_airlines': p['preferred_airlines'] ?? [],
       'avoided_airlines': p['avoided_airlines'] ?? [],
+      'required_airlines': requiredAirlines.text
+          .split(',')
+          .map((value) => value.trim().toUpperCase())
+          .where((value) => value.isNotEmpty)
+          .toList(),
       'priority': 'cheapest',
       'currency': p['currency'] ?? 'USD',
       'departure_window': p['departure_window'] ?? 'any',

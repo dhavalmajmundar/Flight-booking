@@ -12,8 +12,8 @@ Last updated: 2026-07-23
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
 - Verification: 58 Python tests and 4 Flutter widget tests passing; Python
-  compile and Flutter analysis clean. Refreshed Android release APK built
-  locally; the matching Windows package is rebuilt by GitHub Actions after push.
+  compile and Flutter analysis clean. Android and Windows release jobs passed in
+  GitHub Actions run `30063237947` for source commit `47e7fc3`.
 
 ## Current user checkpoint
 
@@ -61,7 +61,7 @@ Last updated: 2026-07-23
   - Android `FlightCompanion-Android.apk` SHA-256
     `32391B8FE94B970CCF8712B84338E1B869B53024FDBFF1D569C240C5114DDF7A`
   - Windows `FlightCompanion-Windows.zip` SHA-256
-    `C6C32FC0CF567458F0D4EDDDEF46C3AE96E2A080C7B158F9E92752D5F8C2059E`
+    `10D9721185DF4DC654BAFDE9253C71D592914544FE712D28320F6AD1B9748895`
 - The user's extracted `/Flight-Companion/` folder and root Windows ZIP are
   ignored by Git and must not be committed.
 

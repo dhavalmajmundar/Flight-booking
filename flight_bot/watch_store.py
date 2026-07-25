@@ -503,6 +503,18 @@ class WatchStore:
         )
         return int(value)
 
+    async def decrement_usage(self, count: int) -> None:
+        """Refund tokens claimed for a check that never produced a result."""
+        if count <= 0:
+            return
+        await self._require_pool().execute(
+            """
+            UPDATE watch_usage SET attempts = GREATEST(0, attempts - $1)
+            WHERE usage_date = CURRENT_DATE
+            """,
+            count,
+        )
+
     async def postpone_due_until_tomorrow(self) -> None:
         await self._require_pool().execute(
             """

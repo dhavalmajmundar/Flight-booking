@@ -1,11 +1,14 @@
+import asyncio
 from datetime import date, datetime, timezone
 
 from flight_bot.config import Settings
 from flight_bot.models import Cabin
+from flight_bot.routestack import FlightSearchError
 from flight_bot.watch_store import request_from_json, request_to_json
 from flight_bot.watch_store import Watch
 from flight_bot.watching import (
     _alert_reasons,
+    _check_watch,
     _sparkline,
     adaptive_watch_interval_hours,
     observed_price_guidance,
@@ -180,3 +183,112 @@ def test_sparkline_uses_stored_values_without_external_service() -> None:
     chart = _sparkline([100, 120, 90, 140])
     assert len(chart) == 4
     assert chart[-1] == "█"
+
+
+class _FakeStore:
+    """Minimal WatchStore stand-in that records what _check_watch does."""
+
+    def __init__(self) -> None:
+        self.usage = 0
+        self.claimed_interval: int | None = None
+        self.failures = 0
+        self.deferred_hours: int | None = None
+
+    async def claim(self, watch: Watch, next_interval_hours: int | None = None) -> bool:
+        self.claimed_interval = next_interval_hours
+        return True
+
+    async def usage_today(self) -> int:
+        return self.usage
+
+    async def increment_usage(self) -> int:
+        self.usage += 1
+        return self.usage
+
+    async def decrement_usage(self, count: int) -> None:
+        self.usage = max(0, self.usage - count)
+
+    async def record_failure(self, watch_id: str) -> None:
+        self.failures += 1
+
+    async def defer_watch(self, watch_id: str, hours: int) -> None:
+        self.deferred_hours = hours
+
+    async def mark_flex_checked(self, watch_id: str) -> None:  # pragma: no cover
+        pass
+
+
+class _FailingClient:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def search(self, request):
+        raise self._exc
+
+
+class _EmptyResultsClient:
+    async def search(self, request):
+        return [], None, None
+
+
+def _watch_for_check(consecutive_failures: int = 0) -> Watch:
+    pending = parse_watch_command(
+        ["JFK", "LAX", "2026-12-20"],
+        settings(),
+        now=datetime(2026, 7, 19, tzinfo=timezone.utc),
+    )
+    return Watch(
+        id="00000000-0000-0000-0000-000000000009",
+        user_id=123,
+        request=pending.request,
+        target_price=None,
+        drop_percent=5,
+        interval_hours=24,
+        expires_at=pending.expires_at,
+        next_check_at=datetime(2026, 7, 19, tzinfo=timezone.utc),
+        consecutive_failures=consecutive_failures,
+    )
+
+
+def test_failed_search_refunds_usage_and_schedules_short_retry() -> None:
+    store = _FakeStore()
+    watch = _watch_for_check(consecutive_failures=0)
+    application = SimpleNamespace(
+        bot_data={"settings": settings(), "routestack": _FailingClient(FlightSearchError("boom"))}
+    )
+
+    asyncio.run(_check_watch(application, store, watch))
+
+    assert store.usage == 0, "the claimed token must be refunded on failure"
+    assert store.failures == 1
+    # 0 prior failures -> 2**0 == 1 hour retry, well short of the 24h/48h
+    # adaptive interval this far-out watch would otherwise wait for.
+    assert store.deferred_hours == 1
+
+
+def test_repeated_failures_back_off_but_stay_capped_at_the_adaptive_interval() -> None:
+    store = _FakeStore()
+    watch = _watch_for_check(consecutive_failures=6)
+    application = SimpleNamespace(
+        bot_data={"settings": settings(), "routestack": _FailingClient(FlightSearchError("boom"))}
+    )
+
+    asyncio.run(_check_watch(application, store, watch))
+
+    # 2**6 == 64h, but must not exceed the watch's own adaptive interval
+    # (48h for a departure this far out).
+    assert store.deferred_hours == 48
+
+
+def test_empty_results_are_treated_as_a_failure_not_a_silent_success() -> None:
+    store = _FakeStore()
+    watch = _watch_for_check()
+    application = SimpleNamespace(
+        bot_data={"settings": settings(), "routestack": _EmptyResultsClient()}
+    )
+
+    asyncio.run(_check_watch(application, store, watch))
+
+    assert store.usage == 0
+    assert store.failures == 1
+    assert store.deferred_hours == 1

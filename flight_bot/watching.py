@@ -1014,9 +1014,20 @@ async def _check_watch(
     )
     remaining = settings.watch_daily_token_cap - await store.usage_today()
     run_flex = flex_due and remaining >= 7
-    for _ in range(7 if run_flex else 1):
+    tokens_used = 7 if run_flex else 1
+    for _ in range(tokens_used):
         await store.increment_usage()
     client: RouteStackClient = application.bot_data["routestack"]
+
+    async def _abandon_check() -> None:
+        # The claimed token bought no price observation, so refund it, and
+        # retry sooner than the full adaptive interval instead of leaving
+        # this watch stalled until its next regularly scheduled check.
+        await store.record_failure(watch.id)
+        await store.decrement_usage(tokens_used)
+        retry_hours = min(max(1, 2 ** watch.consecutive_failures), interval)
+        await store.defer_watch(watch.id, retry_hours)
+
     try:
         search_request = replace(
             watch.request,
@@ -1026,7 +1037,7 @@ async def _check_watch(
         offers, _, _ = await client.search(search_request)
         results = rank_flights(offers, search_request)
         if not results:
-            await store.record_failure(watch.id)
+            await _abandon_check()
             return
         if run_flex:
             await store.mark_flex_checked(watch.id)
@@ -1112,10 +1123,10 @@ async def _check_watch(
         )
     except FlightSearchError as exc:
         logger.warning("Watch %s search failed: %s", watch.short_id, exc)
-        await store.record_failure(watch.id)
+        await _abandon_check()
     except Exception:
         logger.exception("Unexpected watch %s failure", watch.short_id)
-        await store.record_failure(watch.id)
+        await _abandon_check()
 
 
 async def _send_flexible_date_offer(

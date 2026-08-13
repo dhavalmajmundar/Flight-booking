@@ -1,0 +1,29 @@
+services:
+  flight-postgres:
+    image: postgres:18-alpine
+    container_name: flight-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - flight-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  flight-booking:
+    build: .
+    container_name: flight-booking
+    restart: unless-stopped
+    env_file:
+      - .env.oracle
+    depends_on:
+      flight-postgres:
+        condition: service_healthy
+
+volumes:
+  flight-postgres-data:

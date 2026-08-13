@@ -1,12 +1,13 @@
 # Flight Bot Handoff
 
-Last updated: 2026-07-25
+Last updated: 2026-08-13
 
 ## Current status
 
 - Repository: `dhavalmajmundar/Flight-booking`
 - Production branch: `main`
-- Hosting: Railway, connected to GitHub for automatic deployments
+- Hosting: Oracle VM via Coolify, using `/home/ubuntu/flight-booking-app`
+  and `docker-compose.oracle.yml`
 - Runtime: Python Telegram bot using long polling
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
@@ -37,7 +38,10 @@ Last updated: 2026-07-25
 
 ## Current user checkpoint
 
-- Railway API connection is configured and confirmed running.
+- Oracle VM/Coolify deployment is configured and confirmed running.
+- The Railway PostgreSQL service was stopped after `DATABASE_PUBLIC_URL` was
+  switched to the VM-hosted PostgreSQL/Supabase endpoint and the Telegram bot
+  replied successfully to a guided search.
 - The original Windows app was extracted to the ignored local
   `/Flight-Companion/` folder and successfully connected to Railway.
 - Refreshed compact-layout packages are ready under `client_app/releases/`.

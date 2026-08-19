@@ -1019,14 +1019,29 @@ async def _check_watch(
         await store.increment_usage()
     client: RouteStackClient = application.bot_data["routestack"]
 
-    async def _abandon_check() -> None:
-        # The claimed token bought no price observation, so refund it, and
-        # retry sooner than the full adaptive interval instead of leaving
-        # this watch stalled until its next regularly scheduled check.
-        await store.record_failure(watch.id)
+    # After a few consecutive real failures, stop backing off within a tight
+    # retry window and fall back to the watch's normal adaptive interval, so
+    # a bad RouteStack stretch doesn't turn into hourly retries all day.
+    MAX_FAST_RETRY_FAILURES = 3
+
+    async def _refund_unused_check(*, retry_hours: int | None = None) -> None:
+        # The claimed token bought no price observation, so refund it. If a
+        # retry interval is given, reschedule sooner than the full adaptive
+        # interval instead of leaving this watch stalled until its next
+        # regularly scheduled check.
         await store.decrement_usage(tokens_used)
-        retry_hours = min(max(1, 2 ** watch.consecutive_failures), interval)
-        await store.defer_watch(watch.id, retry_hours)
+        if retry_hours is not None:
+            await store.defer_watch(watch.id, retry_hours)
+
+    async def _abandon_check_after_failure() -> None:
+        # A real search error, as opposed to a route/date/filter combination
+        # that simply has no matching offers right now.
+        await store.record_failure(watch.id)
+        if watch.consecutive_failures >= MAX_FAST_RETRY_FAILURES:
+            await _refund_unused_check(retry_hours=interval)
+        else:
+            retry_hours = min(max(1, 2 ** watch.consecutive_failures), interval)
+            await _refund_unused_check(retry_hours=retry_hours)
 
     try:
         search_request = replace(
@@ -1037,7 +1052,12 @@ async def _check_watch(
         offers, _, _ = await client.search(search_request)
         results = rank_flights(offers, search_request)
         if not results:
-            await _abandon_check()
+            # No matching offers right now (including a required-airlines
+            # filter that nothing satisfies) is not a provider error. Refund
+            # the token but stay on the normal adaptive cadence rather than
+            # escalating consecutive_failures/backoff for what may be an
+            # entirely expected, recurring state for this watch.
+            await _refund_unused_check()
             return
         if run_flex:
             await store.mark_flex_checked(watch.id)
@@ -1123,10 +1143,10 @@ async def _check_watch(
         )
     except FlightSearchError as exc:
         logger.warning("Watch %s search failed: %s", watch.short_id, exc)
-        await _abandon_check()
+        await _abandon_check_after_failure()
     except Exception:
         logger.exception("Unexpected watch %s failure", watch.short_id)
-        await _abandon_check()
+        await _abandon_check_after_failure()
 
 
 async def _send_flexible_date_offer(

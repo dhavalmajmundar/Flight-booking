@@ -1,6 +1,6 @@
 # Flight Bot Handoff
 
-Last updated: 2026-08-13
+Last updated: 2026-08-19
 
 ## Current status
 
@@ -12,29 +12,41 @@ Last updated: 2026-08-13
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 61 Python tests passing (58 baseline plus 3 new for the
+- Verification: 63 Python tests passing (58 original baseline plus 5 for the
   failed-watch-check refund/retry behavior below); Python compile clean.
   Flutter widget tests and Android/Windows release jobs unchanged since the
   last verified run (`30063237947` for source commit `47e7fc3`); this change
-  touches only `flight_bot/`.
+  touches only `flight_bot/watching.py` and `tests/test_watching.py`.
 
-## Failed watch checks now refund usage and retry sooner
+## Failed watch checks refund usage and retry without over-escalating
 
-- Previously, a failed watch check (RouteStack error, unexpected exception, or
-  zero ranked results) still consumed its daily-cap token permanently and left
-  the watch's `next_check_at` at the full adaptive interval set by `claim()`
-  before the search ran, so a single transient failure could silently cost a
-  token and delay the next real attempt by up to 48 hours.
+- A failed watch check previously consumed its daily-cap token permanently
+  and left the watch's `next_check_at` at the full adaptive interval set by
+  `claim()` before the search ran, so a single transient failure could
+  silently cost a token and delay the next real attempt by up to 48 hours.
 - `WatchStore.decrement_usage()` refunds the exact number of tokens claimed
-  for that check (1 normally, 7 for a weekly-flex scan) so a failed check
-  never costs part of the daily cap.
-- On any failure path in `_check_watch`, the watch is rescheduled via the
-  existing `defer_watch()` to `min(2 ** watch.consecutive_failures, interval)`
-  hours instead of waiting for the interval already claimed: 1h after the
-  first failure, backing off exponentially, capped at the watch's own
-  adaptive interval so it never waits longer than a normal check would have.
+  for a check that produced no price observation (1 normally, 7 for a
+  weekly-flex scan, confirmed by test).
+- The refund path distinguishes two cases in `_check_watch`:
+  - Zero ranked results (no offers on the route/date, or a
+    `required_airlines` filter nothing currently satisfies) is not a
+    provider error. The token is refunded but the watch stays on its normal
+    adaptive cadence — `consecutive_failures` and backoff are not touched.
+    A watch with a permanently unsatisfiable filter would otherwise get
+    escalated toward `/cleanup` and retried hourly forever for no reason.
+  - An actual `FlightSearchError` or unexpected exception refunds the token
+    and reschedules via `defer_watch()` to
+    `min(2 ** watch.consecutive_failures, interval)` hours: 1h after the
+    first failure, backing off exponentially. Once `consecutive_failures`
+    reaches 3, it stops backing off within that tight window and falls back
+    to the watch's full adaptive interval instead, so a longer RouteStack
+    outage doesn't turn into hourly retries against the provider all day.
 - `consecutive_failures` bookkeeping and the existing `/cleanup` suggestion at
   3+ consecutive failures are unchanged.
+- Known limitation: refunding the internal daily-cap counter does not reduce
+  actual RouteStack calls made during retries. If RouteStack bills per
+  attempt regardless of success, a bad outage still generates real billed
+  calls up to the fast-retry cap before falling back to the slow interval.
 
 ## Current user checkpoint
 

@@ -193,6 +193,8 @@ class _FakeStore:
         self.claimed_interval: int | None = None
         self.failures = 0
         self.deferred_hours: int | None = None
+        self.increments = 0
+        self.decrements: list[int] = []
 
     async def claim(self, watch: Watch, next_interval_hours: int | None = None) -> bool:
         self.claimed_interval = next_interval_hours
@@ -203,10 +205,12 @@ class _FakeStore:
 
     async def increment_usage(self) -> int:
         self.usage += 1
+        self.increments += 1
         return self.usage
 
     async def decrement_usage(self, count: int) -> None:
         self.usage = max(0, self.usage - count)
+        self.decrements.append(count)
 
     async def record_failure(self, watch_id: str) -> None:
         self.failures += 1
@@ -231,7 +235,9 @@ class _EmptyResultsClient:
         return [], None, None
 
 
-def _watch_for_check(consecutive_failures: int = 0) -> Watch:
+def _watch_for_check(
+    consecutive_failures: int = 0, weekly_flex: bool = False
+) -> Watch:
     pending = parse_watch_command(
         ["JFK", "LAX", "2026-12-20"],
         settings(),
@@ -247,6 +253,7 @@ def _watch_for_check(consecutive_failures: int = 0) -> Watch:
         expires_at=pending.expires_at,
         next_check_at=datetime(2026, 7, 19, tzinfo=timezone.utc),
         consecutive_failures=consecutive_failures,
+        weekly_flex=weekly_flex,
     )
 
 
@@ -266,21 +273,36 @@ def test_failed_search_refunds_usage_and_schedules_short_retry() -> None:
     assert store.deferred_hours == 1
 
 
-def test_repeated_failures_back_off_but_stay_capped_at_the_adaptive_interval() -> None:
+def test_backoff_before_the_fast_retry_cap_is_exponential() -> None:
     store = _FakeStore()
-    watch = _watch_for_check(consecutive_failures=6)
+    watch = _watch_for_check(consecutive_failures=2)
     application = SimpleNamespace(
         bot_data={"settings": settings(), "routestack": _FailingClient(FlightSearchError("boom"))}
     )
 
     asyncio.run(_check_watch(application, store, watch))
 
-    # 2**6 == 64h, but must not exceed the watch's own adaptive interval
-    # (48h for a departure this far out).
+    # 2**2 == 4h, still below the fast-retry cap of 3 consecutive failures.
+    assert store.deferred_hours == 4
+
+
+def test_failures_at_the_fast_retry_cap_fall_back_to_the_full_adaptive_interval() -> None:
+    store = _FakeStore()
+    watch = _watch_for_check(consecutive_failures=3)
+    application = SimpleNamespace(
+        bot_data={"settings": settings(), "routestack": _FailingClient(FlightSearchError("boom"))}
+    )
+
+    asyncio.run(_check_watch(application, store, watch))
+
+    # At the fast-retry cap (3 consecutive failures), stop hammering
+    # RouteStack hourly and wait the watch's normal adaptive interval (48h
+    # for a departure this far out) instead of continuing to retry within a
+    # tight window during a longer provider outage.
     assert store.deferred_hours == 48
 
 
-def test_empty_results_are_treated_as_a_failure_not_a_silent_success() -> None:
+def test_empty_results_refund_usage_but_do_not_escalate_backoff() -> None:
     store = _FakeStore()
     watch = _watch_for_check()
     application = SimpleNamespace(
@@ -289,6 +311,32 @@ def test_empty_results_are_treated_as_a_failure_not_a_silent_success() -> None:
 
     asyncio.run(_check_watch(application, store, watch))
 
+    assert store.usage == 0, "the claimed token must be refunded"
+    # A route/date with no matching offers right now -- including a watch
+    # whose required-airlines filter nothing currently satisfies -- is not a
+    # provider error. It must not increment consecutive_failures or trigger
+    # the fast-retry backoff; otherwise a watch with a permanently
+    # unsatisfiable filter would get flagged by /cleanup and retried hourly
+    # forever even though nothing is actually wrong.
+    assert store.failures == 0
+    assert store.deferred_hours is None
+
+
+def test_failed_weekly_flex_check_refunds_all_seven_tokens() -> None:
+    store = _FakeStore()
+    watch = _watch_for_check(weekly_flex=True)
+    application = SimpleNamespace(
+        bot_data={"settings": settings(), "routestack": _FailingClient(FlightSearchError("boom"))}
+    )
+
+    asyncio.run(_check_watch(application, store, watch))
+
+    # A weekly-flex scan claims 7 tokens up front (2 * flexible_days + 1).
+    # If it fails, all 7 must be refunded, not just 1 -- otherwise a single
+    # failed flex scan burns most of the default 10-token daily cap for zero
+    # price observations.
+    assert store.increments == 7
+    assert store.decrements == [7]
     assert store.usage == 0
     assert store.failures == 1
     assert store.deferred_hours == 1

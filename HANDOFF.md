@@ -1,6 +1,6 @@
 # Flight Bot Handoff
 
-Last updated: 2026-08-19
+Last updated: 2026-08-28
 
 ## Current status
 
@@ -12,11 +12,17 @@ Last updated: 2026-08-19
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 63 Python tests passing (58 original baseline plus 5 for the
-  failed-watch-check refund/retry behavior below); Python compile clean.
+- Verification: 64 Python tests passing (58 original baseline, 5 for refund/retry, 1 for search timeout handling); Python compile clean.
   Flutter widget tests and Android/Windows release jobs unchanged since the
   last verified run (`30063237947` for source commit `47e7fc3`); this change
-  touches only `flight_bot/watching.py` and `tests/test_watching.py`.
+  touches `flight_bot/routestack.py` and `tests/test_routestack.py`.
+
+## Flight search timeout extension and clean exception handling
+
+- Resolved an issue where flexible flight searches (which trigger multiple concurrent requests to RouteStack) failed with a blank error message (`I couldn't complete the live search: `) due to slow RouteStack API responses.
+- Increased the HTTPX client timeout from `35.0` to `60.0` seconds to give slow flight searches more time to compile results.
+- Enhanced exception mapping in `RouteStackClient.search`: standard network timeouts/failures are now captured and mapped to clear error messages (e.g., "RouteStack search request timed out.") instead of propagating empty exception strings.
+- Added test coverage via `test_search_timeout_handling` in `tests/test_routestack.py`.
 
 ## Failed watch checks refund usage and retry without over-escalating
 

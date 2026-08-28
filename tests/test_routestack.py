@@ -324,3 +324,39 @@ def test_smart_checked_bags_do_not_override_carry_on_choice() -> None:
     request = asyncio.run(run())
     assert request.checked_bags == 0
     assert request.carry_on_bags == 2
+
+
+def test_search_timeout_handling() -> None:
+    import pytest
+    import httpx
+    from flight_bot.routestack import FlightSearchError
+
+    async def run():
+        client = RouteStackClient(settings())
+
+        async def fake_resolve(query: str, find_alternatives: bool = False):
+            return query, query, [], "US"
+
+        async def fake_search_dates(*args, **kwargs):
+            raise httpx.ReadTimeout("Request timed out")
+
+        client.resolve_location = fake_resolve  # type: ignore[method-assign]
+        client._search_dates = fake_search_dates  # type: ignore[method-assign]
+        request = SearchRequest(
+            origin="JFK",
+            destination="LAX",
+            departure_date=date(2026, 11, 6),
+            return_date=None,
+            adults=4,
+            cabin=Cabin.ECONOMY,
+            flexible_dates=False,
+            nearby_airports=False,
+            checked_bags=0,
+        )
+        with pytest.raises(FlightSearchError) as exc_info:
+            await client.search(request)
+        assert "timed out" in str(exc_info.value)
+        await client.close()
+
+    asyncio.run(run())
+

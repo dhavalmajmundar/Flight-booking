@@ -72,7 +72,7 @@ class RouteStackClient:
         self.settings = settings
         self._client = httpx.AsyncClient(
             base_url=settings.routestack_base_url.rstrip("/"),
-            timeout=httpx.Timeout(35.0),
+            timeout=httpx.Timeout(60.0),
             headers={"User-Agent": "on-demand-flight-telegram-bot/0.2"},
         )
         self._token: str | None = None
@@ -335,7 +335,12 @@ class RouteStackClient:
             else:
                 offers.extend(result)
         if not offers and errors:
-            raise FlightSearchError(str(errors[0]))
+            err = errors[0]
+            if isinstance(err, FlightSearchError):
+                raise err
+            if isinstance(err, httpx.TimeoutException):
+                raise FlightSearchError("RouteStack search request timed out.")
+            raise FlightSearchError(str(err) or f"RouteStack request failed: {type(err).__name__}")
 
         unique: dict[tuple[Any, ...], FlightOption] = {}
         for offer in offers:

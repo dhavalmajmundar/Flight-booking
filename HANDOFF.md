@@ -42,6 +42,17 @@ Last updated: 2026-09-07
   token still had no active poller afterward. Coolify is reachable at the Oracle
   host but requires user login; inspect/restart the `flight-booking` service
   there next. Railway dashboard also requires login. Do not enable both hosts.
+- User signed into Coolify. Flight Booking was not a managed Coolify project;
+  it appeared under Server → Resources → Unmanaged as the manually composed
+  `flight-booking` container. Coolify showed it as running even though Telegram
+  had no active poller. Restarting only that container restored polling; a
+  follow-up `getUpdates` probe returned the expected `409 Conflict`, confirming
+  an active long-poll request. `flight-postgres` was not restarted.
+- Coolify's browser terminal cannot connect because its real-time service/port
+  is unavailable. Oracle SSH also needs the user's authorized private key.
+  Therefore the container was restarted but its on-host checkout/image was not
+  pulled or rebuilt from commits `8485760` / `017d2b2`; deploy those changes on
+  Oracle before calling the reviewed server code shipped.
 
 ## Flight search timeout extension and clean exception handling
 

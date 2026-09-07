@@ -34,6 +34,14 @@ Last updated: 2026-09-07
   over-budget warning/penalty.
 - Added regression tests for both defects. No client rebuild required; changes
   affect server-side search/ranking only.
+- Local same-env startup exposed a Python 3.14 incompatibility in
+  `python-telegram-bot` polling internals. Production Docker uses Python 3.12;
+  package metadata now explicitly supports Python `>=3.11,<3.14` so unsupported
+  local runtimes fail clearly during installation instead of at bot startup.
+- GitHub/Railway deployment of commit `8485760` reported success, but the bot
+  token still had no active poller afterward. Coolify is reachable at the Oracle
+  host but requires user login; inspect/restart the `flight-booking` service
+  there next. Railway dashboard also requires login. Do not enable both hosts.
 
 ## Flight search timeout extension and clean exception handling
 

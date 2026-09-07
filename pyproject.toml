@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "on-demand-flight-bot"
 version = "0.1.0"
 description = "Telegram bot that searches and ranks live RouteStack flight offers on demand."
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
   "airportsdata>=2026.3.15,<2027",
   "asyncpg>=0.30,<1",

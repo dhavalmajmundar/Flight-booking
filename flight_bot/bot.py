@@ -150,6 +150,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/profile — saved airline, budget, and layover preferences\n\n"
         "For a one-line request:\n"
         "/flight JFK LAX 2026-09-15\n\n"
+        "Friendly dates and durations also work:\n"
+        "/flight LGA CLT Nov 2, 2026 for 1 week\n\n"
         "Natural-language shortcut (uses saved/default preferences):\n"
         "/quick New York to Paris on October 10, 2026 for 8 days\n\n"
         "For cities with spaces:\n"
@@ -363,13 +365,53 @@ def _airline_codes(value: str, option: str) -> set[str]:
     return codes
 
 
+def _normalize_flight_args(args: list[str]) -> list[str]:
+    """Turn a friendly date/duration phrase into existing command options."""
+    if len(args) < 3:
+        return args
+
+    option_index = next(
+        (index for index in range(2, len(args)) if args[index].startswith("--")),
+        len(args),
+    )
+    date_parts = args[2:option_index]
+    options = args[option_index:]
+    inferred_options: list[str] = []
+    phrase = " ".join(date_parts).strip()
+
+    duration = re.search(
+        r"\s+for\s+(?P<count>\d+|a|an)\s+"
+        r"(?P<unit>days?|nights?|weeks?)\s*$",
+        phrase,
+        re.I,
+    )
+    if duration:
+        count_text = duration.group("count").lower()
+        count = 1 if count_text in {"a", "an"} else int(count_text)
+        nights = count * (7 if duration.group("unit").lower().startswith("week") else 1)
+        if not 1 <= nights <= 365:
+            raise ValueError("trip duration must be from 1 to 365 days")
+        inferred_options = ["--nights", str(nights)]
+        phrase = phrase[: duration.start()].strip()
+
+    departure = _parse_future_date(phrase)
+    if not departure:
+        raise ValueError(
+            "departure must be today or later (examples: 2026-11-02, "
+            "Nov 2, 2026, or 11/2/2026)"
+        )
+    return [args[0], args[1], departure.isoformat(), *inferred_options, *options]
+
+
 def parse_flight_command(args: list[str]) -> dict:
     if len(args) < 3:
         raise ValueError("origin, destination, and departure date are required")
 
+    args = _normalize_flight_args(args)
+
     departure_value = _parse_future_date(args[2])
     if not departure_value:
-        raise ValueError("departure must be a future date in YYYY-MM-DD format")
+        raise ValueError("departure must be today or later")
 
     trip: dict = {
         "origin": args[0].strip().replace("_", " "),
@@ -644,7 +686,8 @@ async def flight_command(
         await update.message.reply_text(
             f"Invalid flight command: {exc}\n\n"
             "Example:\n"
-            "/flight JFK LAX 2026-09-15\n\n"
+            "/flight JFK LAX 2026-09-15\n"
+            "/flight LGA CLT Nov 2, 2026 for 1 week\n\n"
             "This defaults to a 7-night round trip, 4 adults, economy, flexible "
             "dates, domestic-only nearby airports, 2 checked bags, and 1 carry-on."
         )
@@ -874,9 +917,42 @@ async def calendar_callback(
 
 
 def _parse_future_date(text: str) -> date | None:
-    try:
-        parsed = date.fromisoformat(text.strip())
-    except ValueError:
+    value = re.sub(r"(?<=\d)(?:st|nd|rd|th)\b", "", text.strip(), flags=re.I)
+    parsed: date | None = None
+    formats = (
+        "%Y-%m-%d",
+        "%m/%d/%Y",
+        "%m-%d-%Y",
+        "%m/%d/%y",
+        "%m-%d-%y",
+        "%B %d, %Y",
+        "%B %d %Y",
+        "%b %d, %Y",
+        "%b %d %Y",
+        "%B %d, %y",
+        "%B %d %y",
+        "%b %d, %y",
+        "%b %d %y",
+        "%d %B %Y",
+        "%d %b %Y",
+    )
+    for date_format in formats:
+        try:
+            parsed = datetime.strptime(value, date_format).date()
+            break
+        except ValueError:
+            continue
+    if parsed is None:
+        for date_format in ("%B %d", "%b %d"):
+            try:
+                partial = datetime.strptime(value, date_format).date()
+                parsed = partial.replace(year=date.today().year)
+                if parsed < date.today():
+                    parsed = parsed.replace(year=parsed.year + 1)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
         return None
     return parsed if parsed >= date.today() else None
 
@@ -885,7 +961,8 @@ async def departure(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     parsed = _parse_future_date(update.message.text)
     if not parsed:
         await update.message.reply_text(
-            "Please send a valid future date in YYYY-MM-DD format."
+            "Please send a date today or later, such as 2026-11-02, "
+            "Nov 2, 2026, or 11/2/2026."
         )
         return DEPARTURE
     context.user_data["trip"]["departure_date"] = parsed

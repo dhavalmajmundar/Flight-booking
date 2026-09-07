@@ -216,7 +216,12 @@ For a minimal one-line search:
 
 ```text
 /flight JFK LAX 2026-09-15
+/flight LGA CLT Nov 2, 2026 for 1 week
 ```
+
+`/flight` accepts ISO, common US numeric, full/short month, ordinal, and
+month-day-without-year departure dates. A missing year means the next occurrence.
+Use friendly durations such as `for 8 days`, `for 5 nights`, or `for 2 weeks`.
 
 Natural-language shortcut:
 

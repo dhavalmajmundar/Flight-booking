@@ -14,10 +14,10 @@ Last updated: 2026-09-07
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 66 Python tests passing; Python compile clean.
+- Verification: 70 Python tests passing; Python compile clean.
   Flutter widget tests and Android/Windows release jobs unchanged since the
   last verified run (`30063237947` for source commit `47e7fc3`); this change
-  touches `flight_bot/routestack.py` and `tests/test_routestack.py`.
+  touches only bot parsing/help, its tests, README, and this handoff.
 
 ## 2026-09-07 outage and ship review
 
@@ -60,6 +60,24 @@ Last updated: 2026-09-07
   response text is not present in current `main`, further indicating the Oracle
   container still runs an older image. No desktop/Android rebuild is needed for
   this handoff-only update.
+
+## Natural-language `/flight` dates and durations
+
+- `/flight` now accepts multi-token departure dates instead of treating only
+  its third token as an ISO date. Confirmed example:
+  `/flight lga clt nov 2, 2026 for 1 week`.
+- Accepted departure forms include ISO, common US numeric dates, full or short
+  month names, ordinal days, day-month-year, and month/day without a year. A
+  missing year selects the next occurrence that is not in the past.
+- Friendly `for N days`, `for N nights`, and `for N weeks` phrases infer the
+  round-trip return date. `for a week` is also accepted; explicit command
+  options remain supported and take precedence when supplied afterward.
+- Parsing uses only Python's standard library and makes no RouteStack call.
+  Help/error text and README examples now advertise the friendly syntax.
+- Added four regression cases covering the reported phrase and common numeric
+  and day-month formats. Full suite: 70 passed; existing Starlette/httpx test
+  deprecation warning remains non-blocking. Server deployment is required;
+  desktop and Android client rebuilds are not required.
 
 ## Flight search timeout extension and clean exception handling
 

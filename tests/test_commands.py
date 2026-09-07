@@ -57,6 +57,27 @@ def test_minimal_flight_command_uses_safe_defaults() -> None:
     assert trip["priority"] == Priority.BALANCED
 
 
+def test_flight_command_accepts_natural_date_and_week_duration() -> None:
+    departure = date.today() + timedelta(days=60)
+    natural_date = f"{departure:%b} {departure.day}, {departure.year}"
+
+    trip = parse_flight_command(
+        ["lga", "clt", *natural_date.split(), "for", "1", "week"]
+    )
+
+    assert trip["origin"] == "lga"
+    assert trip["destination"] == "clt"
+    assert trip["departure_date"] == departure
+    assert trip["return_date"] == departure + timedelta(days=7)
+
+
+@pytest.mark.parametrize("date_format", ["%m/%d/%Y", "%m-%d-%Y", "%d %b %Y"])
+def test_flight_command_accepts_common_date_formats(date_format: str) -> None:
+    departure = date.today() + timedelta(days=60)
+    trip = parse_flight_command(["LGA", "CLT", *departure.strftime(date_format).split()])
+    assert trip["departure_date"] == departure
+
+
 def test_full_flight_command() -> None:
     departure = future_date()
     returning = future_date(37)

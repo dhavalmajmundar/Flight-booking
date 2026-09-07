@@ -110,6 +110,18 @@ def test_required_airlines_only_returns_matching_itineraries() -> None:
     assert rank_flights([delta, united], search) is None
 
 
+def test_avoided_airline_remains_visible_but_is_warned_and_penalized() -> None:
+    avoided = option("avoided", 180, 320, 0, "NK")
+    acceptable = option("acceptable", 190, 330, 0, "DL")
+    search = request()
+    search.avoided_airlines = {"NK"}
+    result = rank_flights([avoided, acceptable], search)
+    assert result is not None
+    assert avoided in result.ordered
+    assert result.best_overall is acceptable
+    assert "Uses avoided airline(s): NK" in avoided.warnings
+
+
 def test_cheapest_travel_date_uses_daily_lowest_fares() -> None:
     requested = option("requested", 300, 300, 0)
     earlier = option("earlier", 180, 330, 0)

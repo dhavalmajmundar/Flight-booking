@@ -1,21 +1,39 @@
 # Flight Bot Handoff
 
-Last updated: 2026-08-28
+Last updated: 2026-09-07
 
 ## Current status
 
 - Repository: `dhavalmajmundar/Flight-booking`
 - Production branch: `main`
-- Hosting: Oracle VM via Coolify, using `/home/ubuntu/flight-booking-app`
-  and `docker-compose.oracle.yml`
+- Intended hosting: Oracle VM via Coolify, using
+  `/home/ubuntu/flight-booking-app` and `docker-compose.oracle.yml`. GitHub
+  deployment metadata still shows an attached Railway production service;
+  confirm one host and disable the other to prevent duplicate Telegram polling.
 - Runtime: Python Telegram bot using long polling
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
-- Verification: 64 Python tests passing (58 original baseline, 5 for refund/retry, 1 for search timeout handling); Python compile clean.
+- Verification: 66 Python tests passing; Python compile clean.
   Flutter widget tests and Android/Windows release jobs unchanged since the
   last verified run (`30063237947` for source commit `47e7fc3`); this change
   touches `flight_bot/routestack.py` and `tests/test_routestack.py`.
+
+## 2026-09-07 outage and ship review
+
+- Telegram `getMe` succeeds, webhook is correctly empty, but a direct polling
+  probe returned an unclaimed `getUpdates` response: no bot process was polling.
+  Bot token/API registration is healthy; deployment process needs restart.
+- Local Oracle SSH probe reached `150.136.102.196` but available machine keys
+  were not authorized, so container status/restart could not be performed here.
+- Fixed `avoided_airlines`: matching fares remain visible, receive a prominent
+  warning, and get a strong ranking penalty. Previously this saved option had no
+  ranking effect.
+- Fixed max-budget behavior: RouteStack result assembly no longer silently
+  drops over-budget fares. Ranking keeps them visible and adds the promised
+  over-budget warning/penalty.
+- Added regression tests for both defects. No client rebuild required; changes
+  affect server-side search/ranking only.
 
 ## Flight search timeout extension and clean exception handling
 

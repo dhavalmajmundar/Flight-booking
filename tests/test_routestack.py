@@ -360,3 +360,52 @@ def test_search_timeout_handling() -> None:
 
     asyncio.run(run())
 
+
+def test_search_keeps_over_budget_offers_for_warning_and_comparison() -> None:
+    async def run():
+        client = RouteStackClient(settings())
+
+        async def fake_resolve(query: str, find_alternatives: bool = False):
+            return query, query, [], "US"
+
+        expensive = FlightOption(
+            offer_id="over-budget",
+            airlines=("Example Air",),
+            airline_codes=("EA",),
+            legs=(
+                Leg(
+                    origin="JFK",
+                    destination="LAX",
+                    departure=datetime(2026, 11, 6, 8),
+                    arrival=datetime(2026, 11, 6, 11),
+                    duration_minutes=180,
+                    stops=0,
+                ),
+            ),
+            total_price=900,
+            currency="USD",
+            checked_bags=1,
+        )
+
+        async def fake_search_dates(*args, **kwargs):
+            return [expensive]
+
+        client.resolve_location = fake_resolve  # type: ignore[method-assign]
+        client._search_dates = fake_search_dates  # type: ignore[method-assign]
+        request = SearchRequest(
+            origin="JFK",
+            destination="LAX",
+            departure_date=date(2026, 11, 6),
+            return_date=None,
+            adults=1,
+            cabin=Cabin.ECONOMY,
+            flexible_dates=False,
+            nearby_airports=False,
+            checked_bags=0,
+            max_budget=500,
+        )
+        offers, _, _ = await client.search(request)
+        assert offers == [expensive]
+        await client.close()
+
+    asyncio.run(run())

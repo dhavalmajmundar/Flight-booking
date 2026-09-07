@@ -344,8 +344,6 @@ class RouteStackClient:
 
         unique: dict[tuple[Any, ...], FlightOption] = {}
         for offer in offers:
-            if request.max_budget is not None and offer.total_price > request.max_budget:
-                continue
             key = (
                 offer.airline_codes,
                 tuple((leg.departure, leg.arrival) for leg in offer.legs),

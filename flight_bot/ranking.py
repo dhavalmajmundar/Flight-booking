@@ -117,6 +117,12 @@ def rank_flights(
         )
         if request.preferred_airlines.intersection(offer.airline_codes):
             score -= 0.08
+        avoided = request.avoided_airlines.intersection(offer.airline_codes)
+        if avoided:
+            score += 1.0
+            offer.warnings.append(
+                "Uses avoided airline(s): " + ", ".join(sorted(avoided))
+            )
         if request.max_budget is not None and offer.total_price > request.max_budget:
             score += 0.50
             offer.warnings.append(

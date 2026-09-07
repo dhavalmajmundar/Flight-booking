@@ -39,9 +39,8 @@ Last updated: 2026-09-07
   package metadata now explicitly supports Python `>=3.11,<3.14` so unsupported
   local runtimes fail clearly during installation instead of at bot startup.
 - GitHub/Railway deployment of commit `8485760` reported success, but the bot
-  token still had no active poller afterward. Coolify is reachable at the Oracle
-  host but requires user login; inspect/restart the `flight-booking` service
-  there next. Railway dashboard also requires login. Do not enable both hosts.
+  token still had no active poller afterward. Oracle/Coolify was confirmed as
+  the live host. Railway remains attached and must not run a second bot instance.
 - User signed into Coolify. Flight Booking was not a managed Coolify project;
   it appeared under Server → Resources → Unmanaged as the manually composed
   `flight-booking` container. Coolify showed it as running even though Telegram
@@ -53,6 +52,14 @@ Last updated: 2026-09-07
   Therefore the container was restarted but its on-host checkout/image was not
   pulled or rebuilt from commits `8485760` / `017d2b2`; deploy those changes on
   Oracle before calling the reviewed server code shipped.
+- User then sent `/start` and received the bot's Flight Agent Details response,
+  confirming end-to-end Telegram handling after the restart. The response
+  identified Python, PostgreSQL, Oracle/Coolify, Git, and RouteStack. Its wording
+  associates hosting with `flight-postgres`; operationally, `flight-booking` is
+  the bot container and `flight-postgres` is only its database container. That
+  response text is not present in current `main`, further indicating the Oracle
+  container still runs an older image. No desktop/Android rebuild is needed for
+  this handoff-only update.
 
 ## Flight search timeout extension and clean exception handling
 

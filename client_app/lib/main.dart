@@ -124,7 +124,7 @@ class _ConnectionSetupState extends State<ConnectionSetup> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Enter your public Railway service URL and the private APP_ACCESS_TOKEN. RouteStack and database credentials remain safely on Railway.',
+                    'Enter your public server URL and the private APP_ACCESS_TOKEN. RouteStack and database credentials remain safely on the server.',
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
@@ -132,8 +132,8 @@ class _ConnectionSetupState extends State<ConnectionSetup> {
                     controller: url,
                     keyboardType: TextInputType.url,
                     decoration: const InputDecoration(
-                      labelText: 'Railway URL',
-                      hintText: 'https://your-service.up.railway.app',
+                      labelText: 'Server URL',
+                      hintText: 'https://your-service.example.com',
                       prefixIcon: Icon(Icons.cloud_outlined),
                     ),
                   ),
@@ -156,7 +156,7 @@ class _ConnectionSetupState extends State<ConnectionSetup> {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   content: Text(
-                                    'Use an HTTPS Railway URL and a token of at least 16 characters.',
+                                    'Use an HTTPS server URL and a token of at least 16 characters.',
                                   ),
                                 ),
                               );

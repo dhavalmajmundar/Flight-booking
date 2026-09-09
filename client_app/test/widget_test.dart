@@ -114,4 +114,64 @@ void main() {
     expect(tester.getBottomLeft(button).dy, lessThan(993));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'connection dialog rejects a blank re-entered token instead of '
+    'silently doing nothing',
+    (tester) async {
+      var calls = 0;
+      var savedUrl = '';
+      var savedToken = '';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SettingsScreen(
+              api: _FakeApi(),
+              onConfigure: (url, token) async {
+                calls++;
+                savedUrl = url;
+                savedToken = token;
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Change connection'));
+      await tester.pumpAndSettle();
+
+      // Change the URL but leave the token field at its default blank --
+      // this is the exact trap that silently no-op'd before the fix, since
+      // the token field never shows a previously saved value.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'HTTPS URL'),
+        'https://flightbot.shivoralabs.com',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(
+        calls,
+        0,
+        reason: 'must not save when the token was not re-entered',
+      );
+      expect(
+        find.textContaining('Re-enter the full access token'),
+        findsOneWidget,
+      );
+
+      // Now provide both fields fully and it should actually save.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'APP_ACCESS_TOKEN'),
+        'a-real-token-0123456789',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(calls, 1);
+      expect(savedUrl, 'https://flightbot.shivoralabs.com');
+      expect(savedToken, 'a-real-token-0123456789');
+    },
+  );
 }

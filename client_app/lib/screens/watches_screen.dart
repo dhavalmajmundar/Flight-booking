@@ -70,7 +70,7 @@ class _WatchesScreenState extends State<WatchesScreen> {
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
                       const Text(
-                        'Persistent, owner-only monitoring within the Railway daily cap.',
+                        'Persistent, owner-only monitoring within the daily watch cap.',
                       ),
                     ],
                   ),

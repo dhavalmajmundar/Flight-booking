@@ -17,13 +17,45 @@ Last updated: 2026-09-09
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
 - Companion app API is now reachable at `https://flightbot.shivoralabs.com`
-  (see "2026-09-09 public API endpoint" below). Both the Windows and Android
-  FlightCompanion app installs still had the old, now-decommissioned Railway
-  URL configured and need to be repointed at this URL with the
-  `APP_ACCESS_TOKEN` from `.env.oracle` entered in Settings.
+  (see "2026-09-09 public API endpoint" below).
 - Verification: 70 Python tests passing; Python compile clean.
-  Flutter widget tests and Android/Windows release jobs unchanged since the
-  last verified run (`30063237947` for source commit `47e7fc3`).
+  Flutter changes below are unverified locally (no Flutter SDK in this
+  environment) — real verification is `build-apps.yml`'s `flutter analyze`
+  and `flutter test` steps, which run automatically on push to `main` since
+  this change touches `client_app/**`. Confirm that workflow run is green
+  in GitHub Actions before installing the rebuilt APK/Windows zip.
+
+## 2026-09-09 client app: silent connection-save failure
+
+- After the endpoint fix above, re-pointing the FlightCompanion app at the
+  new URL appeared to silently revert to the old Railway URL/token. Root
+  cause was in the app itself, not the server: `settings_screen.dart`'s
+  "Change secure connection" dialog always shows the token field blank (by
+  design — the saved token is a secret and isn't redisplayed), but its Save
+  handler was `if (token.text.length < 16) return;` with no error message.
+  Typing only the new URL and leaving the token field as it looked
+  (blank) silently cancelled the entire save, including the URL change —
+  so the app kept using the old Railway URL/token the whole time, and any
+  search request 404'd against that decommissioned service.
+- Fixed in `settings_screen.dart` (`_connectionDialog`) and mirrored the
+  existing validation pattern from `main.dart`'s first-run
+  `ConnectionSetup`: URL must start with `https://`, token must be at least
+  16 characters after re-entry, and either failure now shows an inline
+  error message in the dialog (via `StatefulBuilder`) instead of silently
+  no-op'ing.
+- Added a widget test (`test/widget_test.dart`) that reproduces the exact
+  trap — enters a new URL, leaves the token blank, confirms `onConfigure`
+  is *not* called and the error text appears — then confirms it saves
+  correctly once both fields are filled.
+- Also removed stale "Railway"-specific wording from `main.dart`,
+  `settings_screen.dart`, and `watches_screen.dart` (URL field labels,
+  helper text, the daily-cap description) now that the app is expected to
+  point at whatever host is actually running it.
+- Not yet done: confirm the GitHub Actions build is green, then actually
+  reinstall the rebuilt Android APK / Windows build and repoint both at
+  `https://flightbot.shivoralabs.com` with the `APP_ACCESS_TOKEN` from
+  `.env.oracle`, retyping the full token (not leaving it blank) in the
+  fixed dialog.
 
 ## 2026-09-09 public API endpoint: flightbot.shivoralabs.com
 

@@ -382,7 +382,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   const Expanded(
                     child: Text(
-                      'Change the Railway URL or private app token. The token is stored using the platform secure-storage service.',
+                      'Change the server URL or private app token. The token is stored using the platform secure-storage service.',
                     ),
                   ),
                   OutlinedButton.icon(
@@ -478,46 +478,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _connectionDialog() async {
     final url = TextEditingController(text: widget.api.baseUrl),
         token = TextEditingController();
+    String? error;
+    bool submitting = false;
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Change secure connection'),
-        content: SizedBox(
-          width: 520,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: url,
-                decoration: const InputDecoration(
-                  labelText: 'Railway HTTPS URL',
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Change secure connection'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: url,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(labelText: 'HTTPS URL'),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: token,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'APP_ACCESS_TOKEN',
+                const SizedBox(height: 12),
+                TextField(
+                  controller: token,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'APP_ACCESS_TOKEN',
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 8),
+                const Text(
+                  'This field is intentionally always blank for security. '
+                  'Re-enter the full token even if it has not changed -- '
+                  'leaving it blank does not keep the previous one and '
+                  'will silently cancel this save.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    error!,
+                    style: const TextStyle(color: Colors.red),
+                  ),
+                ],
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      if (!url.text.trim().startsWith('https://')) {
+                        setDialogState(
+                          () => error = 'URL must start with https://',
+                        );
+                        return;
+                      }
+                      if (token.text.trim().length < 16) {
+                        setDialogState(
+                          () => error =
+                              'Re-enter the full access token (at least 16 '
+                              'characters). It is not saved from before.',
+                        );
+                        return;
+                      }
+                      setDialogState(() {
+                        error = null;
+                        submitting = true;
+                      });
+                      await widget.onConfigure(url.text, token.text);
+                      if (context.mounted) Navigator.pop(context);
+                    },
+              child: const Text('Save'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              if (token.text.length < 16) return;
-              await widget.onConfigure(url.text, token.text);
-              if (context.mounted) Navigator.pop(context);
-            },
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
   }

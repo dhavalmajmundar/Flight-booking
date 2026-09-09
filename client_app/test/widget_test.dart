@@ -119,6 +119,16 @@ void main() {
     'connection dialog rejects a blank re-entered token instead of '
     'silently doing nothing',
     (tester) async {
+      // The default flutter_test viewport (800x600) is too short for this
+      // screen's narrow single-column layout, which pushes the "App
+      // connection" card below the fold and off-screen -- match the
+      // desktop size used by the "desktop settings fit" test above so the
+      // button and dialog are actually reachable by tap()/enterText().
+      tester.view.physicalSize = const Size(1179, 993);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       var calls = 0;
       var savedUrl = '';
       var savedToken = '';

@@ -1,25 +1,56 @@
 # Flight Bot Handoff
 
-Last updated: 2026-09-08
+Last updated: 2026-09-09
 
 ## Current status
 
 - Repository: `dhavalmajmundar/Flight-booking`
 - Production branch: `main`
-- Intended hosting: Oracle VM via Coolify, using
-  `/home/ubuntu/flight-booking-app` and `docker-compose.oracle.yml`. GitHub
-  deployment metadata still shows an attached Railway production service;
-  confirm one host and disable the other to prevent duplicate Telegram polling.
-  This is the leading suspect for the 2026-09-08 recurrence below and remains
-  unresolved.
+- Hosting: Oracle VM via Coolify, using `/home/ubuntu/flight-booking-app`
+  and `docker-compose.oracle.yml`. This is now the *only* host — the Railway
+  production service was confirmed as an active second Telegram poller (see
+  2026-09-09 below) and has been taken offline. Its GitHub deploy connection
+  should still be disconnected or the service deleted outright so a future
+  push or manual redeploy can't silently bring it back online.
 - Runtime: Python Telegram bot using long polling
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
 - Verification: 70 Python tests passing; Python compile clean.
   Flutter widget tests and Android/Windows release jobs unchanged since the
-  last verified run (`30063237947` for source commit `47e7fc3`). This change
-  touches only `docker-compose.oracle.yml`.
+  last verified run (`30063237947` for source commit `47e7fc3`).
+
+## 2026-09-09 root cause confirmed: Railway was a live second poller
+
+- Deployed the 2026-09-08 healthcheck commit (`9a28018`) to Oracle. The
+  Oracle VM's own `git pull` initially failed with
+  `Permission denied (publickey)`: the `flight-booking_github` deploy key
+  existed in `~/.ssh` but had no `Host` alias routing `github.com` to it, so
+  git fell back to no usable key. Fixed by adding a
+  `Host github.com-flightbooking` entry to `~/.ssh/config`
+  (`IdentityFile ~/.ssh/flight-booking_github`) and repointing
+  `origin` to `git@github.com-flightbooking:dhavalmajmundar/Flight-booking.git`.
+  Confirm the key is registered as a GitHub deploy key on this repo if this
+  ever needs to be redone on a fresh box.
+- After `git pull` + `docker compose -f docker-compose.oracle.yml up -d --build`,
+  `docker inspect flight-booking` showed `"Status":"healthy"` — the new
+  healthcheck works — but `docker logs -f flight-booking` showed
+  `telegram.error.Conflict: terminated by other getUpdates request`
+  recurring every ~30 seconds continuously, not just once at container
+  swap. That confirmed, rather than just suspected, an active second
+  poller on the same bot token.
+- Checked the Railway dashboard: both the `Postgres` and `Flight-booking`
+  services showed as running there. Removed the Flight-booking deployment.
+  Oracle's logs immediately went quiet (healthcheck `GET / 200 OK` only, no
+  more `Conflict`), and `/start` in Telegram got a normal reply from
+  `Dhaval's Flight Agent`. This closes out both the 2026-09-07 and
+  2026-09-08 outages under one confirmed root cause.
+- Remaining risk: the Railway service was stopped/removed but not
+  necessarily disconnected from GitHub or deleted. If it auto-redeploys on
+  a future push, the same conflict returns even with the healthcheck in
+  place, since the healthcheck only recovers a *hung* container — it does
+  nothing about a second process legitimately competing for the same
+  Telegram long-poll. Fully disconnect or delete the Railway service.
 
 ## 2026-09-08 recurrence: same failure signature, added a healthcheck
 

@@ -1,6 +1,6 @@
 # Flight Bot Handoff
 
-Last updated: 2026-09-07
+Last updated: 2026-09-08
 
 ## Current status
 
@@ -10,14 +10,45 @@ Last updated: 2026-09-07
   `/home/ubuntu/flight-booking-app` and `docker-compose.oracle.yml`. GitHub
   deployment metadata still shows an attached Railway production service;
   confirm one host and disable the other to prevent duplicate Telegram polling.
+  This is the leading suspect for the 2026-09-08 recurrence below and remains
+  unresolved.
 - Runtime: Python Telegram bot using long polling
 - Flight provider: RouteStack
 - Handoff policy: update this file in every completed change; use `git log -1`
   for the commit containing the latest handoff
 - Verification: 70 Python tests passing; Python compile clean.
   Flutter widget tests and Android/Windows release jobs unchanged since the
-  last verified run (`30063237947` for source commit `47e7fc3`); this change
-  touches only bot parsing/help, its tests, README, and this handoff.
+  last verified run (`30063237947` for source commit `47e7fc3`). This change
+  touches only `docker-compose.oracle.yml`.
+
+## 2026-09-08 recurrence: same failure signature, added a healthcheck
+
+- The FlightCompanion app showed "Request failed (502)" on open and the
+  Telegram bot was simultaneously unresponsive — the same combined symptom as
+  2026-09-07, because `flight_bot/main.py` runs both the API (background
+  thread) and Telegram long-polling (main thread) in one process/container.
+  A 502 means the reverse proxy got no response from that container's origin.
+- `docker-compose.oracle.yml` had a `healthcheck` for `flight-postgres` but
+  none for `flight-booking`. With `restart: unless-stopped`, Docker/Coolify
+  only restarts a container that actually exits; a hang (process alive,
+  not serving) goes undetected indefinitely. This matches yesterday's note
+  that Coolify showed the container as running while nothing was polling.
+- Added a `healthcheck` to the `flight-booking` service that hits the
+  unauthenticated `GET /` route (`flight_bot/api.py`) using only the Python
+  stdlib (`urllib.request`), so no new package is added to the image.
+  30s interval, 10s timeout, 3 retries, 20s start period. Verified locally
+  that the command exits 0 against a live listener and non-zero once the
+  listener is gone.
+- This makes a hung container self-heal without a manual Coolify restart,
+  but does not address the still-open Railway/Oracle dual-hosting risk
+  flagged above, which remains the leading suspect for *why* the process
+  hangs or crashes in the first place (a second Telegram poller from a
+  Railway auto-redeploy can force a `Conflict` against the same bot token).
+  Confirming that requires checking Railway's deployment history and the
+  Oracle container's logs around the failure time — not done here.
+- Deploy this change on Oracle (rebuild/redeploy `flight-booking` via
+  Coolify) for the healthcheck to take effect; it is a compose-file-only
+  change, so no client rebuild is needed.
 
 ## 2026-09-07 outage and ship review
 

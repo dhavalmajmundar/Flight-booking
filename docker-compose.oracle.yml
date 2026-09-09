@@ -24,6 +24,21 @@ services:
     depends_on:
       flight-postgres:
         condition: service_healthy
+    healthcheck:
+      # Hits the unauthenticated "/" route (flight_bot/api.py) on the same
+      # port the process serves both the companion API and, indirectly,
+      # proof the process is alive at all -- Telegram long-polling runs on
+      # the same main thread, so a hang here means the bot is unresponsive
+      # too. Uses only the stdlib so no extra package is needed in the image.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PORT','8080')}/\", timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
 volumes:
   flight-postgres-data:

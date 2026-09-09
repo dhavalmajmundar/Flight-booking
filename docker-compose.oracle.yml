@@ -24,6 +24,30 @@ services:
     depends_on:
       flight-postgres:
         condition: service_healthy
+    networks:
+      - default
+      - coolify
+    labels:
+      # Routes flightbot.shivoralabs.com through Coolify's Traefik proxy to
+      # this container's port 8080 (flight_bot/main.py, PORT in .env.oracle).
+      # Pattern copied from the working "shivora-website" Coolify app
+      # (entryPoint names "http"/"https" and certresolver "letsencrypt" are
+      # specific to this Coolify instance, confirmed via `docker inspect` on
+      # that container -- they are not generic Traefik defaults). Coolify
+      # does not manage domains/TLS for unmanaged compose services, so this
+      # is hand-written rather than generated.
+      - "traefik.enable=true"
+      - "traefik.http.services.flight-booking.loadbalancer.server.port=8080"
+      - "traefik.http.routers.flight-booking-http.rule=Host(`flightbot.shivoralabs.com`)"
+      - "traefik.http.routers.flight-booking-http.entryPoints=http"
+      - "traefik.http.routers.flight-booking-http.middlewares=flight-booking-redirect-to-https"
+      - "traefik.http.routers.flight-booking-http.service=flight-booking"
+      - "traefik.http.middlewares.flight-booking-redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.routers.flight-booking-https.rule=Host(`flightbot.shivoralabs.com`)"
+      - "traefik.http.routers.flight-booking-https.entryPoints=https"
+      - "traefik.http.routers.flight-booking-https.tls=true"
+      - "traefik.http.routers.flight-booking-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.flight-booking-https.service=flight-booking"
     healthcheck:
       # Hits the unauthenticated "/" route (flight_bot/api.py) on the same
       # port the process serves both the companion API and, indirectly,
@@ -39,6 +63,15 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+networks:
+  # Coolify's own proxy network. Must already exist (Coolify creates it);
+  # this only attaches flight-booking to it so Traefik's Docker provider can
+  # discover the labels above. flight-postgres is untouched and stays on the
+  # implicit default network; flight-booking keeps "default" too so it can
+  # still reach flight-postgres by service name (see DATABASE_URL).
+  coolify:
+    external: true
 
 volumes:
   flight-postgres-data:

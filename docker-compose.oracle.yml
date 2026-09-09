@@ -36,6 +36,14 @@ services:
       # that container -- they are not generic Traefik defaults). Coolify
       # does not manage domains/TLS for unmanaged compose services, so this
       # is hand-written rather than generated.
+      #
+      # Unlike shivora-website (which is only on the "coolify" network),
+      # this service is also on the implicit "default" network so it can
+      # still reach flight-postgres by name. With two networks, Traefik
+      # can't infer which IP to route to and will time out (504) -- this
+      # label is required to disambiguate, confirmed via docker inspect
+      # showing two distinct IPs for this container.
+      - "traefik.docker.network=coolify"
       - "traefik.enable=true"
       - "traefik.http.services.flight-booking.loadbalancer.server.port=8080"
       - "traefik.http.routers.flight-booking-http.rule=Host(`flightbot.shivoralabs.com`)"

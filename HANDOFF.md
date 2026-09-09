@@ -54,12 +54,25 @@ Last updated: 2026-09-09
   Traefik's Docker provider can discover it, while keeping it on the
   implicit `default` network too so it still resolves `flight-postgres` by
   name for `DATABASE_URL`.
+- First deploy hit two sequential issues, both resolved:
+  - `https://flightbot.shivoralabs.com/` initially failed TLS verification
+    with a self-signed certificate. Expected on a brand-new domain — Let's
+    Encrypt issuance is triggered by the first HTTPS request and takes a
+    short moment; a retry ~45s later got a valid cert.
+  - After that, requests returned `504` (Traefik reached no backend in
+    time). `docker inspect flight-booking` showed the container has two
+    distinct IPs — one on `coolify` (`10.0.2.7`), one on the implicit
+    `default` network (`10.0.6.3`) — because, unlike `shivora-website`
+    (which is only on `coolify`), this service also needs `default` to
+    reach `flight-postgres` by name. With two networks Traefik can't infer
+    which IP to route to. Fixed by adding
+    `traefik.docker.network=coolify` to explicitly disambiguate.
+- Verify after redeploying: `curl -sS -o /dev/null -w '%{http_code}\n'
+  https://flightbot.shivoralabs.com/` should return `200` (allow ~45s after
+  first deploy for the certificate).
 - Not yet done: repoint the FlightCompanion app (Windows + Android) at
   `https://flightbot.shivoralabs.com` with the real `APP_ACCESS_TOKEN`, and
-  confirm the app loads Search/Watches/Dashboard without 401s. Also verify
-  Let's Encrypt actually issued a certificate for the new host on first
-  request (check `docker logs coolify-proxy` if the app reports a TLS
-  error rather than a clean response).
+  confirm the app loads Search/Watches/Dashboard without 401s.
 
 ## 2026-09-09 root cause confirmed: Railway was a live second poller
 
